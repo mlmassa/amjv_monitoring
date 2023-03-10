@@ -2,7 +2,6 @@
 .Rhistory
 .Rapp.history
 
-
 # Session Data files
 .RData
 
@@ -39,3 +38,6 @@ vignettes/*.pdf
 
 # R Environment Variables
 .Renviron
+
+# Data files (keep processed)
+data/raw/
