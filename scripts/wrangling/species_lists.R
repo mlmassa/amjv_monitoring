@@ -87,65 +87,68 @@ mapply(
 # Create container. We'll start with WOTH because we know they're present!
 species_list <- "Wood Thrush"
 
+# Set which month-weeks to retain
+my_monthweeks <-
+  c("May-1", "May-2", "May-3", "May-4", "Jun-1", "Jun-2", "Jun-3", "Jun-4")
+
 # For loop: generate species lists and append them to species_list
 for(i in my_locations) {
   
   # Read in frequency table:
-    freq <- 
+  freq <- 
     read.delim(
       paste0(
         "data/raw/ebird_",
         i,
         "__1900_2021_4_7_barchart.txt"), 
       skip = 12, 
-      stringsAsFactors = FALSE) %>% 
-    as_tibble() %>% 
-    select(-50) %>% 
-    # Rename columns: name and "Month-Week#"
-    magrittr::set_colnames(
-      c('name', 
-        vapply(
-          month.abb, 
-          paste, 
-          FUN.VALUE = character(4), 
-          1:4, 
-          sep = "-"))) 
+      stringsAsFactors = FALSE) |> 
+  as_tibble() |> 
+  select(-50) |> 
+  # Rename columns: name and "Month-Week#"
+  magrittr::set_colnames(
+    c('name', 
+      vapply(
+        month.abb, 
+        paste, 
+        FUN.VALUE = character(4), 
+        1:4, 
+        sep = "-"))) 
   
   # Transform into long data with clean names:
-    freq_long <-
-    # Get long data
-    reshape(
-      data.frame(freq[-1, ]), 
-      varying = 2:49, 
-      direction = "long", 
-      v.names = "frequency", 
-      idvar = "name", 
-      timevar = "month_week", 
-      times = names(freq)[2:49]) %>% 
-      tbl_df() %>% 
-    # Remove HTML if present (if you got scientific names)
-    mutate_at("name", str_replace, "\\s\\(<em\\sclass=sci>", "") %>% 
-    mutate_at("name", str_replace, "<\\Wem>\\)", "") %>% 
-    # Filter the data
-    filter(
-      # Only May and June
-      month_week %in% c("May-1", "May-2", "May-3", "May-4", 
-                        "Jun-1", "Jun-2", "Jun-3", "Jun-4"),
-      # Species present
-      frequency != 0)
+  freq_long <-
+  # Get long data
+  reshape(
+    data.frame(freq[-1, ]), 
+    varying = 2:49, 
+    direction = "long", 
+    v.names = "frequency", 
+    idvar = "name", 
+    timevar = "month_week", 
+    times = names(freq)[2:49]) |> 
+    tbl_df() |> 
+  # Remove HTML if present (if you got scientific names)
+  mutate_at("name", str_replace, "\\s\\(<em\\sclass=sci>", "") |> 
+  mutate_at("name", str_replace, "<\\Wem>\\)", "") |> 
+  # Filter the data
+  filter(
+    # Only chosen time period
+    month_week %in% my_monthweeks,
+    # Species present
+    frequency != 0)
   
   # Create list of species for that location 
-    new_species <- 
+  new_species <- 
     unique(freq_long$name)
   
   # Append to full species list, no duplicates
-    for(s in new_species) {
-  species_list[[length(species_list) + 1]] <- s
-  species_list <- unique(species_list)
+  for(s in new_species) {
+    species_list[[length(species_list) + 1]] <- s
+    species_list <- unique(species_list)
   }
   
   # Clean up
-    rm(freq, freq_long, new_species)
+  rm(freq, freq_long, new_species)
   
 }
 
@@ -156,19 +159,22 @@ new_tax <- ebirdtaxonomy()
 
 # Generate species table
 species <-
-  tibble(comName = species_list) %>% 
-    # Add eBird taxonomy
-    left_join(
-      new_tax,
-      by = "comName") %>% 
-    select(
-      sciName,
-      comName,
-      category,
-      taxonOrder,
-      bandingCodes) %>% 
+  tibble(comName = species_list) |> 
+  # Add eBird taxonomy
+  left_join(
+    new_tax,
+    by = "comName") |> 
+  # Retain only relevant columns
+  select(
+    sciName,
+    comName,
+    category,
+    taxonOrder,
+    bandingCodes) |> 
+  # Remove species with no code
   filter(
-    !is.na(bandingCodes)) %>% 
+    !is.na(bandingCodes)) |> 
+  # Sort taxonomically
   arrange(taxonOrder)
 
 # Write csv of species

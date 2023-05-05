@@ -18,23 +18,25 @@ gs4_auth(token = drive_token())
 
 # Get vector of sheet names
 sheets <-
-  drive_get('AMJV_data_entry_tidy') %>% 
-  gs4_get() %>% 
+  drive_get('AMJV_data_entry_tidy') |> 
+  gs4_get() |> 
   sheet_names()
 
 # Read in data. This will take a minute.
-sheets %>% 
+sheets |> 
     map(
     function(name) {
-      drive_get('AMJV_data_entry_tidy') %>% 
-      gs4_get() %>% 
+      drive_get('AMJV_data_entry_tidy') |> 
+      gs4_get() |> 
       read_sheet(name)
-    }) %>% 
-    set_names(sheets) %>% 
+    }) |> 
+    set_names(sheets) |> 
 # Import tables separately to global environment
 list2env(.GlobalEnv)
 
 # Assign eventID ----------------------------------------------------------
+
+# Generate a unique identifier for all bird detection events
 
 # Function: random string generator ABC1234. 175,760,000 options.
 random_string <-

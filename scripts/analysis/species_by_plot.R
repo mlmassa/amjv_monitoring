@@ -5,26 +5,25 @@
 library(leaflet)
 library(sf)
 library(tmap)
-library(lubridate)
 library(tidyverse)
 
 # Import data
-read_rds("data/raw/amjv_data.rds") %>% 
+read_rds("data/raw/amjv_data.rds") |> 
   list2env(.GlobalEnv)
 
 # Create untidy dataset ---------------------------------------------------
 
 untidy_data <-
-  count_data %>% 
-    left_join(visits) %>% 
-    left_join(points) %>% 
-    left_join(plots)
+  count_data |> 
+  left_join(visits) |> 
+  left_join(points) |> 
+  left_join(plots)
 
 
 # Get effort by plot type/block -------------------------------------------
 
-untidy_data %>% 
-  group_by(plot_type, year(date)) %>% 
+untidy_data |> 
+  group_by(plot_type, year(date)) |> 
   summarize(
     points_surveyed = length(unique(point_id)),
     species = length(unique(species)))
@@ -32,32 +31,32 @@ untidy_data %>%
 
 # Solo counts -------------------------------------------------------------
 
-visits %>% 
-  group_by(point_id, year(date)) %>% 
-  summarize(visits = length(visit)) %>% 
+visits |> 
+  group_by(point_id, year(date)) |> 
+  summarize(visits = length(visit)) |> 
   filter(visits == 1)
 
 
 # Histogram of #species per count -----------------------------------------
 
-untidy_data %>% 
-  group_by(visit_id) %>% 
+untidy_data |> 
+  group_by(visit_id) |> 
   summarize(
-    species = length(unique(species))) %>% 
-  left_join(visits %>% select(visit_id, point_id)) %>% 
-  left_join(points %>% select(point_id, plot_name)) %>% 
-  left_join(plots %>% select(plot_name, ownership)) %>% 
+    species = length(unique(species))) |> 
+  left_join(visits |> select(visit_id, point_id)) |> 
+  left_join(points |> select(point_id, plot_name)) |> 
+  left_join(plots |> select(plot_name, ownership)) |> 
   ggplot(aes(species)) +
   geom_histogram(binwidth = 1)
 
 # Boxplot of #species by ownership
-untidy_data %>% 
-  group_by(visit_id) %>% 
+untidy_data |> 
+  group_by(visit_id) |> 
   summarize(
-    species = length(unique(species))) %>% 
-  left_join(visits %>% select(visit_id, point_id)) %>% 
-  left_join(points %>% select(point_id, plot_name)) %>% 
-  left_join(plots %>% select(plot_name, ownership)) %>% 
+    species = length(unique(species))) |> 
+  left_join(visits |> select(visit_id, point_id)) |> 
+  left_join(points |> select(point_id, plot_name)) |> 
+  left_join(plots |> select(plot_name, ownership)) |> 
   ggplot(aes(x = ownership, y = species)) +
   geom_boxplot()
 
@@ -68,44 +67,44 @@ untidy_data %>%
 summary_plots <-
   
   # Plots, points, species, birds
-  untidy_data %>% 
-    group_by(plot_name) %>% 
+  untidy_data |> 
+    group_by(plot_name) |> 
     summarize(
       points_surveyed = length(unique(point_id)),
-      species = length(unique(species))) %>% 
+      species = length(unique(species))) |> 
   
   # Add number of focal species per plot
   left_join(
-    untidy_data %>% 
-      group_by(plot_name, species) %>% 
-      summarize(count = n()) %>% 
-      filter(species %in% c("WOTH", "GWWA", "CERW")) %>% 
+    untidy_data |> 
+      group_by(plot_name, species) |> 
+      summarize(count = n()) |> 
+      filter(species %in% c("WOTH", "GWWA", "CERW")) |> 
       pivot_wider(
         names_from = species,
         values_from = count),
-    by = "plot_name") %>% 
+    by = "plot_name") |> 
   
   # Add number of ARUs deployed per plot
   left_join(
-    audiomoth_activity %>% 
-      filter(action == "deployed") %>% 
-      select(point_id) %>% 
-      unique() %>% 
+    audiomoth_activity |> 
+      filter(action == "deployed") |> 
+      select(point_id) |> 
+      unique() |> 
       # Add point
       left_join(
-        points %>% 
+        points |> 
           select(point_id, plot_name),
-        by = "point_id") %>% 
+        by = "point_id") |> 
       # Add plot
       left_join(
-        plots %>% 
+        plots |> 
           select(plot_name),
-        by = "plot_name") %>% 
-      group_by(plot_name) %>% 
+        by = "plot_name") |> 
+      group_by(plot_name) |> 
       # Get ARUs per plot
       summarize(
         ARUs = n()),
-    by = "plot_name") %>% 
+    by = "plot_name") |> 
   
   # Replace NA with 0
   mutate_all(~replace(., is.na(.), 0))
@@ -113,22 +112,22 @@ summary_plots <-
 
 # Get most abundant species -----------------------------------------------
 
-visits %>% filter(visit == 2) %>% select(visit_id) %>% count()
+visits |> filter(visit == 2) |> select(visit_id) |> count()
 # 118 visits round 1
 # 91 visits round 2
 
 abundance <-
-  untidy_data %>% 
-    group_by(visit_id, visit, species, .drop = FALSE) %>% 
+  untidy_data |> 
+    group_by(visit_id, visit, species, .drop = FALSE) |> 
     # Get count of each species on each visit
     summarize(
       count = (n()),
-      .groups = "drop") %>% 
-    group_by(species, visit) %>% 
+      .groups = "drop") |> 
+    group_by(species, visit) |> 
     # Get total abundance, number of counts appearing on
     summarize(
       abundance = sum(count),
-      counts = n()) %>% 
+      counts = n()) |> 
     # Summarize presence
     mutate(
       total_counts = if_else(visit == 1, 118, 91),
@@ -137,24 +136,24 @@ abundance <-
       avg_if_present = abundance/counts)
 
 # Which species were ONLY detected round 2?
-abundance %>% 
-  ungroup %>% 
-  select(species, visit, prop_counts_present) %>% 
-  pivot_wider(names_from = visit, values_from = prop_counts_present, names_prefix = "visit_") %>% 
-  replace_na(list(visit_1 = 0, visit_2 = 0)) %>% 
+abundance |> 
+  ungroup |> 
+  select(species, visit, prop_counts_present) |> 
+  pivot_wider(names_from = visit, values_from = prop_counts_present, names_prefix = "visit_") |> 
+  replace_na(list(visit_1 = 0, visit_2 = 0)) |> 
   filter(visit_1 == 0)
 
 # Get top 15 spp
 top_15 <-
-  abundance %>% 
-  summarize(total_abund = sum(abundance)) %>% 
-  arrange(-total_abund) %>% 
-  slice_head(n = 20) %>% 
+  abundance |> 
+  summarize(total_abund = sum(abundance)) |> 
+  arrange(-total_abund) |> 
+  slice_head(n = 20) |> 
   pull(species)
 
 # Get top species to graph
-abundance %>% 
-  filter(species %in% top_15) %>% 
+abundance |> 
+  filter(species %in% top_15) |> 
   ggplot(
     aes(
       x = reorder(species, -prop_counts_present), 
@@ -198,31 +197,31 @@ species_by_plot <-
       
       # Species by plot name:
       plot_split <-
-        count_data %>% 
-        select(visit_id, species) %>% 
+        count_data |> 
+        select(visit_id, species) |> 
         left_join(
-          visits %>% 
+          visits |> 
             select(point_id, visit_id), 
-          by = "visit_id") %>% 
+          by = "visit_id") |> 
         left_join(
-          points %>% 
+          points |> 
             select(point_id, plot_name), 
-          by = "point_id") %>% 
+          by = "point_id") |> 
         
         # Separate by plot
-        filter(plot_name == unique(plots$plot_name)[i]) %>% 
+        filter(plot_name == unique(plots$plot_name)[i]) |> 
         
         # Add species names
         left_join(
-          species_list %>% 
+          species_list |> 
             select(sci_name, common_name, banding_code, taxon_order), 
-          by = c("species" = "banding_code")) %>% 
+          by = c("species" = "banding_code")) |> 
         
         # Order and generate compact list of unique species
-        arrange(taxon_order) %>% 
-        select(common_name, sci_name) %>% 
+        arrange(taxon_order) |> 
+        select(common_name, sci_name) |> 
         unique()
-    }) %>% 
+    }) |> 
   # Name list elements by plot
   set_names(unique(plots$plot_name))
 
@@ -233,23 +232,23 @@ date(visits$start_time) <- date(visits$date)
 
 # Get summary by point
 map_data <- 
-  untidy_data %>% 
+  untidy_data |> 
     # Get species count
-    group_by(point_id) %>% 
+    group_by(point_id) |> 
       summarize(
         total_species = length(unique(species)),
         WOTH = length(event_id[species == "WOTH"]),
-        CERW = length(event_id[species == "CERW"])) %>% 
+        CERW = length(event_id[species == "CERW"])) |> 
     # Add plot name, lat, long
-    right_join(points, by = "point_id") %>% 
-    right_join(plots, by = "plot_name") %>% 
+    right_join(points, by = "point_id") |> 
+    right_join(plots, by = "plot_name") |> 
     # Add ARU number at point
     right_join(
-      audiomoth_activity %>% 
-        filter(action == "deployed") %>% 
-        select(point_id, recorder_id) %>% 
+      audiomoth_activity |> 
+        filter(action == "deployed") |> 
+        select(point_id, recorder_id) |> 
         unique(),
-      by = "point_id") %>% 
+      by = "point_id") |> 
   # Make it spatial
   st_as_sf(
     coords = c("long", "lat")#,
@@ -258,12 +257,12 @@ map_data <-
 
 # Import blocks
 sampling_units <-
-  st_read("data/raw/SelectedPSU_Grids.shp") %>% 
-  #st_transform(crs = 4326) %>% 
+  st_read("data/raw/SelectedPSU_Grids.shp") |> 
+  #st_transform(crs = 4326) |> 
   select(
     id = OBJECTID,
     ownership = Own_Type,
-    name = Name) %>% 
+    name = Name) |> 
   mutate(
     name = 
       str_replace_all(name, pattern = "_", replacement = " "),
@@ -271,12 +270,12 @@ sampling_units <-
       case_when(
         str_detect(ownership, "NGO") ~ "NGO",
         str_detect(ownership, "FED") ~ "Federal",
-        str_detect(ownership, "STATE") ~ "State")) %>% 
+        str_detect(ownership, "STATE") ~ "State")) |> 
   filter(
     !name %in% 
-      c("State C", "NGO Over", "NGO D", "Fed A", "Fed D", "Fed F")) %>% 
+      c("State C", "NGO Over", "NGO D", "Fed A", "Fed D", "Fed F")) |> 
   left_join(
-    summary_plots %>% 
+    summary_plots |> 
       select(plot_name, points_surveyed, species, ARUs),
     by = c("name" = "plot_name")
   )
@@ -347,9 +346,9 @@ tm_basemap(
 
 # Most abundant species ---------------------------------------------------
 
-untidy_data %>% 
-  group_by(visit, species) %>% 
+untidy_data |> 
+  group_by(visit, species) |> 
   summarize(
-    count = length(unique(event_id))) %>% 
-  pivot_wider(names_from = visit, values_from = count) %>% 
+    count = length(unique(event_id))) |> 
+  pivot_wider(names_from = visit, values_from = count) |> 
   arrange(-`1`)
