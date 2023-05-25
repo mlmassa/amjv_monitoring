@@ -1,0 +1,623 @@
+---
+title: "&nbsp;"
+author: "&nbsp;"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+options(knitr.table.format = "html")
+library(leaflet)
+library(sf)
+library(tmap)
+library(lubridate)
+library(tidyverse)
+library(kableExtra)
+library(DT)
+```
+
+
+
+## Enhancing structural diversity in public and private forests through collaborative partnerships and increased planning capacity in the Blue Ridge focal geography
+
+```{r header_image, echo=FALSE, fig.align='center'}
+knitr::include_graphics('https://i.imgur.com/zfRz0DN.jpg')
+```
+
+**Animal Migration Research Group**  
+Emily B. Cohen, PhD  
+University of Maryland Center for Environmental Science, Appalachian Laboratory  
+Contact: [Emily.Cohen@UMCES.edu](mailto:Emily.Cohen@UMCES.edu)  
+Web: [https://www.umces.edu/emily-cohen](https://www.umces.edu/emily-cohen)  
+
+<hr>
+
+## 2021 field season report
+
+*This is an interactive HTML document, and some elements can be clicked on and explored. In order to display all figures, ensure you have saved this file to your computer and opened it in a compatible browser.*
+
+```{r aru_image, echo = FALSE, out.width='40%', out.extra = 'style = "float:right; padding:10px"'}
+knitr::include_graphics("https://i.imgur.com/Q4SjVJz.jpg")
+```
+
+In collaboration with the Appalachian Mountains Joint Venture (AMJV), we designed and implemented a monitoring program using paired point counts and autonomous recording units (ARUs) to establish baseline data for habitat use by target species Wood Thrush (WOTH, *Hylocichla mustelina*), Cerulean Warbler (CERW, *Setophaga cerulea*), and Golden-winged Warblers (GWWA, *Vermivora chrysoptera*) within Dynamic Forest Restoration Blocks, and to track avian response to forest management activities.
+
+Monitoring surveys occurred during May and June of 2021, coinciding with the peak breeding season for songbirds in the central Appalachian region. Point counts were conducted at each location twice per season beginning 30 minutes before sunrise and concluding four hours after sunrise. 
+
+The Dynamic Forest Restoration Blocks surveyed consisted of T. M. Gathright Wildlife Management Area in Bath County; Goshen and Little North Mountain Wildlife Management Area in Rockbridge County; portions of the George Washington & Jefferson National Forests; and NGO and private lands. Sampling units were classified as either effects or population monitoring. Size and observer capacity prohibited surveying the entirety of each sampling unit; therefore, we worked with the AMJV to develop a sampling methodology to best capture bird community response to forest management over time, working with the VA project team and discussed at the region-wide monitoring planning meeting. 
+
+We designed a tidy database and generated this report summarizing our efforts during the 2021 field season. 
+
+```{r data_import, include = FALSE}
+# Import data
+read_rds('data/raw/amjv_data.rds') %>% 
+  list2env(.GlobalEnv)
+
+# Create untidy dataset
+untidy_data <-
+  count_data %>% 
+    left_join(visits) %>% 
+    left_join(points) %>% 
+    left_join(plots)
+```
+
+### Monitoring effort
+
+We conducted `r count(visits)` surveys at `r length(unique(visits$point_id))` total points during two sampling periods. The two rounds were separated by 2-3 weeks at 91 of these points; 27 points were only visited once due to time constraints or other issues. We deployed ARUs at `r length(unique(audiomoth_activity$point_id))` total points, collecting 3.18 TB of audio data, which has been downloaded but has not been analyzed.
+
+Point counts detected two focal species, Wood Thrush and Cerulean Warbler. No Golden-winged Warblers or *Vermivora* hybrids were detected. Total detections of focal species can be found in Table 1. While Wood Thrush was detected in nearly all plots, Cerulean Warbler was only detected in two plots: Fed C, in the George Washington & Jefferson National Forest near California, VA; and State D, a slope near the lake at T. M. Gathright WMA.
+
+```{r focal_detection_table, message = FALSE, echo = FALSE}
+# Generate a tibble of:
+# Plot, npoints surveyed, nARUs deployed, nspecies, nWOTH, nCERW, nGWWA
+
+summary_plots <-
+  
+  # Plots, points, species, birds
+  untidy_data %>% 
+    group_by(ownership, plot_name) %>% 
+    summarize(
+          points_surveyed = length(unique(point_id)),
+          species = length(unique(species))) %>% 
+  
+  # Add number of focal species per plot
+  left_join(
+    untidy_data %>% 
+      group_by(plot_name, species) %>% 
+      summarize(count = n()) %>% 
+      filter(species %in% c('WOTH', 'GWWA', 'CERW')) %>% 
+      pivot_wider(
+        names_from = species,
+        values_from = count),
+    by = 'plot_name') %>% 
+  
+  # Add number of ARUs deployed per plot
+  left_join(
+    audiomoth_activity %>% 
+      filter(action == 'deployed') %>% 
+      select(point_id) %>% 
+      unique() %>% 
+      # Add point
+      left_join(
+        points %>% 
+          select(point_id, plot_name),
+        by = 'point_id') %>% 
+      # Add plot
+      left_join(
+        plots %>% 
+          select(plot_name),
+        by = 'plot_name') %>% 
+      group_by(plot_name) %>% 
+      # Get ARUs per plot
+      summarize(
+        ARUs = n()),
+    by = 'plot_name') %>% 
+  
+  # Replace NA with 0
+  mutate_all(~replace(., is.na(.), 0))
+
+# Display summary table
+kable(summary_plots,
+      col.names = c('Ownership',
+                    'Plot', 
+                    'Points', 
+                    'Species', 
+                    'WOTH', 
+                    'CERW',
+                    'ARUs'),
+      format = 'html',
+      caption = 'Table 1. Monitoring effort by plot. "Points" are the number of points with point counts; focal species counts represent the total number of detections of that species in the plot summed over both sampling periods.') %>% 
+kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)
+
+```
+
+We observed `r length(unique(untidy_data$species))` species in total. The mean number of species observed per plot was `r mean(summary_plots$species)` (SD = `r round(sd(summary_plots$species), 3)`). The most abundant species were Red-eyed Vireo (*Vireo olivaceus*), Ovenbird (*Seiurus aurocapilla*), Scarlet Tanager (*Piranga olivacea*), Tufted Titmouse (*Baeolophus bicolor*), and Worm-eating Warbler (*Helmitheros vermivorum*). Complete species lists for each plot can be found in Appendix I.
+
+Some species were only detected in the first round of sampling. Species that were observed more than once during the first sampling period but not observed in the second: Wild Turkey (*Meleagris gallopavo*), Red-winged Blackbird (*Agelaius phoeniceus*), Swainson's Thrush (*Catharus ustulatus*), and Yellow-throated Warbler (*Setophaga dominica*). The only species that was observed more than once during the second sampling period but was missing in the first was Brown Creeper (*Certhia americana*). The proportion of sampled points where the species was present is shown for the 15 most abundant species in Figure 1. Interestingly, White-breasted Nuthatch (*Sitta carolinensis*) was observed on a higher proportion of counts during the second sampling period, whereas Eastern Wood-Pewee (*Contopus virens*) was observed on drastically fewer counts in the second period.
+
+```{r top_species, fig.align = 'center', fig.cap = 'Figure 1. Proportion of counts where the top 15 species were detected.', echo = FALSE, message = FALSE, warning = FALSE}
+abundance <-
+  untidy_data %>% 
+    group_by(visit_id, visit, species, .drop = FALSE) %>% 
+    # Get count of each species on each visit
+    summarize(
+      count = (n()),
+      .groups = 'drop') %>% 
+    group_by(species, visit) %>% 
+    # Get total abundance, number of counts appearing on
+    summarize(
+      abundance = sum(count),
+      counts = n()) %>% 
+    # Summarize presence
+    mutate(
+      total_counts = if_else(visit == 1, 118, 91),
+      prop_counts_present = counts/total_counts,
+      avg_per_count = abundance/total_counts,
+      avg_if_present = abundance/counts)
+
+top_15 <-
+  abundance %>%
+    ungroup() %>% 
+    select(species, visit, abundance) %>% 
+    pivot_wider(names_from = visit, values_from = abundance, names_prefix = 'visit_') %>% 
+    rowwise() %>% 
+    mutate(avg_abundance = mean(c(visit_1, visit_2), na.rm = T)) %>% 
+    ungroup() %>% 
+    arrange(-avg_abundance) %>% 
+    slice(1:15) %>% 
+    pull(species)
+
+# Graph proportion of counts observed, top 10 sp
+abundance %>% 
+  filter(species %in% top_15) %>% 
+  ggplot(
+    aes(
+      x = reorder(species, -prop_counts_present), 
+      y = prop_counts_present, 
+      fill = factor(visit))) +
+  geom_bar(
+    stat = 'identity', 
+    width = 0.75,
+    color = 'black',
+    position = position_dodge(width = 0.75)) +
+  labs(
+    x = 'Species',
+    y = 'Prop. counts detected',
+    fill = 'Sampling\nperiod') +
+  scale_y_continuous(
+    breaks = seq(0, 1, by = 0.2),
+    limits = c(0, 1),
+    expand = c(0,0)) +
+  scale_fill_manual(values = c('grey20', 'grey60')) +
+  theme(axis.title = element_text(size = 14),
+      plot.title = element_text(size = 16),
+      axis.text = element_text(size = 10),
+      axis.text.x = element_text(angle = 45, hjust = 0.7, vjust = 0.75),
+      legend.title = element_text(size = 14),
+      legend.text = element_text(size = 12),
+      legend.position = c(0.9, 0.8),
+      panel.background = element_rect(fill = 'white'),
+      panel.grid = element_line(color = "#bfbfbf"),
+      panel.grid.minor = element_line(linetype = 'dashed'),
+      axis.line = element_line(color = 'black'))
+```
+
+Some ARUs were lost, destroyed, damaged by water, or failed to record properly. The greatest source of data loss was from black bears. Bears were the assumed culprits of ARUs that were damaged or lost from 38 points on 13 plots (Boiling Springs, Fed B, Fed C, Fed Over, Goshen Effects, Meadowgrounds, NGO B, NGO C, Potts, State A, State B, State Over, and at TNC Effects monitoring). This means that bears interfered with 21% of all ARUs deployed. In the 2022 field season we will employ strategies such as covering bags with camo cloth, attaching them slightly higher, and potentially changing how we use silica packets, which we suspect had a scent that attracted bears.
+
+```{r beardamage_pic, echo=FALSE, fig.align='center', out.width='50%', fig.cap='Bear damage to an ARU.'}
+knitr::include_graphics('https://i.imgur.com/ecVnoxr.jpg')
+```
+
+```{r species_lists, include = FALSE}
+# Generate a list with a tibble of species for each plot
+
+# Map function:
+
+species_by_plot <-
+  map(
+    1:length(unique(plots$plot_name)),
+    function(i) {
+      
+      # Species by plot name:
+        plot_split <-
+          count_data %>% 
+            select(visit_id, species) %>% 
+            left_join(
+              visits %>% 
+                select(point_id, visit_id), 
+              by = 'visit_id') %>% 
+            left_join(
+              points %>% 
+                select(point_id, plot_name), 
+              by = 'point_id') %>% 
+          
+          # Separate by plot
+          filter(plot_name == unique(plots$plot_name)[i]) %>% 
+          
+          # Add species names
+          left_join(
+            species_list %>% 
+              select(sci_name, common_name, banding_code, taxon_order), 
+            by = c('species' = 'banding_code')) %>% 
+          
+          # Order and generate compact list of unique species
+          arrange(taxon_order) %>% 
+          select(common_name, sci_name) %>% 
+          unique()
+    }) %>% 
+  # Name list elements by plot
+  set_names(unique(plots$plot_name))
+```
+
+### Maps
+
+The following maps show the number of species and the individuals of each focal species observed at each point. Colored blocks represent the sampling units colored by ownership type. You can zoom, pan, and switch between topographic and satellite base layers in the layer panel on the left. To view focal species layers individually, click to expand the layer panel on the left and then check or uncheck the species. Mouse over a point to see its name. Click on a point or sampling unit to see information about it including ownership, focal species, ARU information, etc.
+```{r map_setup, include = FALSE}
+# Get summary by point
+
+map_data <- 
+  untidy_data %>% 
+    # Get species count
+    group_by(point_id) %>% 
+      summarize(
+        total_species = length(unique(species)),
+        WOTH = length(event_id[species == 'WOTH']),
+        CERW = length(event_id[species == 'CERW'])) %>% 
+    # Add plot name, lat, long
+    right_join(points, by = 'point_id') %>% 
+    right_join(plots, by = 'plot_name') %>% 
+    # Add ARU number at point
+    right_join(
+      audiomoth_activity %>% 
+        filter(action == 'deployed') %>% 
+        select(point_id, recorder_id) %>% 
+        unique(),
+      by = 'point_id') %>% 
+  # Make it spatial
+  st_as_sf(
+    coords = c('long', 'lat'))
+
+# Import sampling units
+
+sampling_units <-
+  st_read('data/raw/SelectedPSU_Grids.shp') %>% 
+  select(
+    id = OBJECTID,
+    name = Name) %>% 
+  mutate(
+    # Rename variables for map
+    name = 
+      str_replace_all(name, pattern = '_', replacement = ' ')) %>% 
+  # Remove unvisited plots
+  filter(
+    !name %in% 
+      c('State C', 'NGO Over', 'NGO D', 'Fed A', 'Fed D', 'Fed F')) %>% 
+  # Add plot summary info
+  left_join(
+    summary_plots %>% 
+      select(plot_name, ownership, points_surveyed, species, ARUs),
+    by = c('name' = 'plot_name'))
+```
+<br>
+**Map of total species detected at each point.**
+
+```{r Species_map, message=FALSE, warning=FALSE, echo = FALSE}
+# Map of points, colored by total species
+
+sp_map <-
+  tm_basemap(
+    c('Esri.WorldTopoMap',
+      'Esri.WorldImagery')) +
+    
+  # SAMPLING UNITS
+  tm_shape(sampling_units) +
+  tm_polygons(
+    col = 'ownership',
+    palette = c('#49D4B9', '#D1B7E1', '#FFFF99'),
+    alpha = 0.5,
+    id = 'name',
+    popup.vars =
+      c('Plot name' = 'name',
+        'Ownership' = 'ownership',
+        'Points surveyed' = 'points_surveyed',
+        'Total species' = 'species',
+        'ARUs deployed' = 'ARUs')) +
+
+  # SURVEY POINTS
+  tm_shape(map_data) +
+  tm_dots(
+    size = 0.07,
+    col = 'total_species',
+    border.col = 'black',
+    palette = 'YlOrRd',
+    popup.vars =
+      c('Plot name' = 'plot_name',
+       'Ownership' = 'ownership',
+       'Monitoring type' = 'plot_type',
+       'Species' = 'total_species',
+       'ARU ID' = 'recorder_id'),
+    title = 'Species observed',
+    colorNA = 'grey40',
+    textNA = 'ARU only',
+    clustering = FALSE)
+
+tmap_leaflet(sp_map, mode = 'view')
+```
+
+<br>
+**Map of focal species detections.**
+
+```{r WOTH_map, message=FALSE, warning=FALSE, echo = FALSE}
+# Map of points, colored by WOTH and CERW detections (0-4)
+
+# Create subsets
+WOTH <-
+  map_data %>% filter(!is.na(WOTH))
+
+CERW <-
+  map_data %>% filter(!is.na(CERW))
+
+focal_map <- 
+  tm_basemap(
+    c('Esri.WorldTopoMap',
+      'Esri.WorldImagery')) +
+      
+  # SAMPLING UNITS
+  tm_shape(sampling_units) +
+  tm_polygons(
+    col = 'ownership',
+    palette = c('#49D4B9', '#D1B7E1', '#FFFF99'),
+    alpha = 0.5,
+    id = 'name',
+    popup.vars = 
+      c('Plot name' = 'name', 
+        'Ownership' = 'ownership', 
+        'Points surveyed' = 'points_surveyed')) +
+  
+    tm_shape(CERW) +
+    tm_dots(
+      size = 0.1,
+      col = 'CERW',
+      breaks = c(0:4),
+      palette = 'Blues',
+      popup.vars = 
+        c('Plot name' = 'plot_name',
+          'Ownership' = 'ownership',
+          'Monitoring type' = 'plot_type',
+          'WOTH detections' = 'WOTH',
+          'CERW detections' = 'CERW'),
+      title = 'CERW detections',
+      colorNA = 'grey40',
+      textNA = 'Not surveyed',
+      clustering = FALSE) +
+  
+  # SURVEY POINTS
+    tm_shape(WOTH) +
+    tm_dots(
+      size = 0.1,
+      col = 'WOTH',
+      palette = 'PuRd',
+      popup.vars = 
+        c('Plot name' = 'plot_name',
+          'Ownership' = 'ownership',
+          'Monitoring type' = 'plot_type',
+          'WOTH detections' = 'WOTH',
+          'CERW detections' = 'CERW'),
+      title = 'WOTH detections',
+      colorNA = 'grey40',
+      textNA = 'Not surveyed',
+      clustering = FALSE) 
+
+tmap_leaflet(focal_map, mode = 'view')
+```
+
+### Conclusion
+
+We had a successful first season of monitoring in Bath and Rockbridge County, Virginia with paired point count surveys and ARU sampling on federal, state, NGO and private lands. We established the sampling locations and gained an understanding of the effort necessary to sample across this mountainous region. The sampled plots varied in the number of species detected and in the species the composition. Of the three focal species, Wood Thrush were relatively abundant among the sampling plots while Cerulean warblers were only detected on one plot and no Golden-winged Warblers or *Vermivora* hybrids were detected. With a few exceptions, more species were detected during the first round of surveys, in late May, as compared to the second round of surveys, in early to mid-June.  We did have significant loss of ARUs due to bear damage which was not surprising in this region where bear abundance is quite high. Nevertheless, we collected a considerable amount of ARU data, all of which has been downloaded from the devices and is stored and backed up on Appalachian Laboratory servers until focal species detection algorithms become available.
+
+For the 2022 field season, we plan to largely replicate the 2021 effort. Our hope is to visit most of the same locations for paired point counts and ARU recording. The exception to this is that we do not plan to revisit Potts and sampling on a few of the Forest Service plots is dependent on the availability of the local contractor. We would like to explore options for reducing bear damage including perhaps adding a camouflage cloth covering and/or not using the silica gel packs. We also hope to implement a more consistent and meaningful vegetation survey for ARU detection, which was extremely limited in 2021 due to our time and personnel limits. Given the species detection results, we plan to conduct the counts slightly earlier and within a more condensed time period, 15 May and 10 June.
+
+### Appendices
+
+Appendix I. Complete species lists for each plot surveyed. Species are sorted in taxonomic order. Click the arrow to show/hide the list.
+
+<details> <summary> Boiling Springs </summary>
+```{r BS_species, echo = FALSE}
+kable(species_by_plot$`Boiling Springs`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+  
+<details> <summary> Bolar Mountain </summary>
+```{r Bolar_species, echo = FALSE}
+kable(species_by_plot$`Bolar Mountain`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+
+<details> <summary> Fed B </summary>
+```{r FB_species, echo = FALSE}
+kable(species_by_plot$`Fed B`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+  
+<details> <summary> Fed C </summary>
+```{r FC_species, echo = FALSE}
+kable(species_by_plot$`Fed C`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+  
+<details> <summary> Fed E </summary>
+```{r FE_species, echo = FALSE}
+kable(species_by_plot$`Fed E`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+  
+<details> <summary> Fed Over </summary>
+```{r FO_species, echo = FALSE}
+kable(species_by_plot$`Fed Over`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+  
+<details> <summary> Goshen Effects </summary>
+```{r Goshen_species, echo = FALSE}
+kable(species_by_plot$`Goshen Effects`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+
+<details> <summary> Meadowgrounds </summary>
+```{r MG_species, echo = FALSE}
+kable(species_by_plot$`Meadowgrounds`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+
+<details> <summary> NGO A </summary>
+```{r NA_species, echo = FALSE}
+kable(species_by_plot$`NGO A`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+  
+<details> <summary> NGO B </summary>
+```{r NB_species, echo = FALSE}
+kable(species_by_plot$`NGO B`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+
+<details> <summary> NGO C </summary>
+```{r NC_species, echo = FALSE}
+kable(species_by_plot$`NGO C`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+  
+<details> <summary> NGO E </summary>
+```{r NE_species, echo = FALSE}
+kable(species_by_plot$`NGO E`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+
+<details> <summary> NGO F </summary>
+```{r NF_species, echo = FALSE}
+kable(species_by_plot$`NGO F`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+
+<details> <summary> Potts </summary>
+```{r Potts_species, echo = FALSE}
+kable(species_by_plot$`Potts`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+
+<details> <summary> State A </summary>
+```{r SA_species, echo = FALSE}
+kable(species_by_plot$`State A`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+
+<details> <summary> State B </summary>
+```{r SB_species, echo = FALSE}
+kable(species_by_plot$`State B`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+
+<details> <summary> State D </summary>
+```{r SD_species, echo = FALSE}
+kable(species_by_plot$`State D`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+  
+<details> <summary> State E </summary>
+```{r SE_species, echo = FALSE}
+kable(species_by_plot$`State E`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+  
+<details> <summary> State F </summary>
+```{r SF_species, echo = FALSE}
+kable(species_by_plot$`State F`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+
+<details> <summary> State Over </summary>
+```{r SO_species, echo = FALSE}
+kable(species_by_plot$`State Over`,
+      format = 'html',
+      col.names = c('Common name', 'Scientific name')) %>% 
+  column_spec(2, italic = T)
+```
+  </details>
+
+<br>
+Appendix II. Species list with banding codes for all species detected.
+<details> <summary> Full species list </summary>
+```{r}
+species_list %>% 
+  filter(banding_code %in% count_data$species) %>% 
+  select(banding_code, common_name, sci_name) %>% 
+kable(format = 'html',
+      col.names = c('Banding code', 'Common name', 'Scientific name')) %>% 
+  column_spec(3, italic = T) %>% 
+  column_spec(1, bold = T) %>% 
+  kable_styling(bootstrap_options = 'striped', full_width = F, position = 'left')
+```
+</details>
+<hr>
+
+Interactive HTML document created by Megan Massa  
+Contact: [Megan.Massa@UMCES.edu](mailto:megan.massa@umces.edu)  
+Web: [http://www.meganmassa.com/](http://www.meganmassa.com/)  
+  

@@ -1,0 +1,1074 @@
+---
+title: "2021-2022 Field Report"
+subtitle: "Enhancing structural diversity in public and private forests in the Blue Ridge focal geography"
+author: ""
+output: 
+  bookdown::html_document2:
+    theme: cerulean
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    toc_title: "Report sections"
+    number_sections: false
+---
+
+```{r include = FALSE}
+# Set knit and display options
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+options(
+  knitr.table.format = "html",
+  knitr.kable.NA = "---")
+
+# Load required packages
+library(sf)
+library(tmap)
+library(tidyverse)
+library(kableExtra)
+library(DT)
+
+theme_set(theme_bw(base_size = 13))
+
+# Import data
+read_rds('data/raw/amjv_data.rds') |> 
+  list2env(.GlobalEnv)
+
+visits <- 
+  mutate(visits, year = year(date))
+
+# Create untidy dataset
+untidy_data <-
+  count_data |> 
+  left_join(visits, by = join_by(visit_id)) |> 
+  left_join(points, by = join_by(point_id)) |> 
+  left_join(plots, by = join_by(plot_name))
+
+# Count point-visits per year (# 1 visit, # 2 visits)
+n_visits <- 
+  visits |> 
+  summarize(
+    visits = length(unique(visit_id)), 
+    .by = c(point_id, year)) |> 
+  summarize(
+    n_points = n(), 
+    .by = c(visits, year))
+
+# Time between visits by year
+visit_interval <-
+  visits |> 
+  select(point_id, visit, date, year) |> 
+  pivot_wider(
+    names_from = visit, 
+    values_from = date, 
+    names_prefix = 'date_') |> 
+  mutate(interval = date_2 - date_1) |> 
+  summarize(
+    interval = 
+      mean(interval, na.rm = T) |> 
+      floor() |> 
+      as.numeric(),
+    .by = year)
+
+# Add year to audiomoth_activity
+audiomoth_activity <- 
+  audiomoth_activity |>
+  mutate(year = if_else(str_detect(deployment_id, 'BATH2021'), 2021, 2022))
+
+# ARU deployment info
+arus_deployed <-
+  audiomoth_activity |> 
+  group_by(deployment_id) |> 
+  select(point_id, deployment_id) |> 
+  distinct() |> 
+  left_join(
+    audiomoths |> 
+      select(deployment_id, recorder_id, card_id)) |> 
+  filter(!is.na(point_id)) |> 
+  mutate(
+    year = if_else(str_detect(deployment_id, 'BATH2021'), 2021, 2022))
+
+annual_arupoints <-
+  audiomoth_activity |> 
+  group_by(year) |> 
+  select(point_id) |> 
+  unique() |> 
+  count()
+
+aru_report <-
+  audiomoth_activity |> 
+  select(deployment_id, action, date, year) |> 
+  # mutate(date = as.character(date)) |> 
+  pivot_wider(
+    names_from = action, 
+    values_from = date) |> 
+  # Add point and deployment combo
+  left_join(
+    arus_deployed |> select(point_id), 
+    by = 'deployment_id') |> 
+  left_join(
+    audiomoths |> select(deployment_id, recorder_id, card_id),
+    by = 'deployment_id') |> 
+  select(
+    deployment_id, recorder_id, card_id, point_id, year,
+    deployed, collected, sd_removed, downloaded, lost) |> 
+  left_join(points) |> 
+  left_join(plots)
+
+final_arus <-
+  aru_report |> 
+  group_by(point_id, year) |> 
+  filter(deployed == max(deployed)) |> 
+  mutate(
+    duration = 
+      difftime(collected, deployed, units = "days") |> 
+      as.numeric())
+
+deployment_time <-
+  final_arus |> 
+  filter(!is.na(downloaded)) |> 
+  group_by(year) |> 
+  summarize(days_deployed = mean(duration))
+
+# Import sampling units
+
+sampling_units <-
+  st_read('data/raw/SelectedPSU_Grids.shp') |> 
+  st_transform(crs = 4326) |> 
+  select(
+    id = OBJECTID,
+    name = Name) |> 
+  mutate(
+    # Rename variables for map
+    name = str_replace_all(name, pattern = '_', replacement = ' ')) |> 
+  # Remove unvisited plots
+  filter(name %in% plots$plot_name) |> 
+  left_join(plots, by = join_by(name == plot_name))
+
+```
+
+```{r echo = FALSE, out.width = '100%'}
+knitr::include_graphics("IngallsAirportOverlook_MM_crop.jpg")
+```
+
+```{r out.width = '25%', out.extra = 'style = "float:right; padding:10px"'}
+knitr::include_graphics("UMCES-AL-logo.jpg")
+```
+
+Summary provided by Emily Cohen, Megan Massa, and Claire Nemes <br>
+
+**Animal Migration Research Group** <br>Appalachian Laboratory, University of Maryland Center for Environmental Science <br>Frostburg, Maryland
+
+# Introduction
+
+```{r out.width = '40%', out.extra = 'style = "float:right; padding:10px"'}
+knitr::include_graphics("burn_area.jpg")
+```
+
+This document summarizes survey efforts and results for forest bird monitoring during the two years in which we performed field surveys, 2021 and 2022.
+
+In collaboration with the Appalachian Mountains Joint Venture (AMJV), we implemented a monitoring program using paired point counts and autonomous recording units (ARUs) to establish baseline data for breeding season habitat use by target species Wood Thrush (WOTH, *Hylocichla mustelina*), Cerulean Warbler (CERW, *Setophaga cerulea*), and Golden-winged Warbler (GWWA, *Vermivora chrysoptera*) within Dynamic Forest Restoration Blocks, and to track avian response to forest management activities.
+
+Avian monitoring surveys ran from `r filter(visits, year == 2021)$date |> min() |>  format('%d %b')` to `r filter(visits, year == 2021)$date |> max() |>  format('%d %b')` 2021 and `r filter(visits, year == 2022)$date |> min() |>  format('%d %b')` to `r filter(visits, year == 2022)$date |> max() |>  format('%d %b')` 2022, coinciding with the early breeding season for songbirds in the central Appalachian region. Fixed-radius point counts were conducted at each location twice per season beginning 30 minutes before sunrise and concluding four hours after sunrise.
+
+The Dynamic Forest Restoration Blocks surveyed consisted of T. M. Gathright Wildlife Management Area in Bath County; Goshen and Little North Mountain Wildlife Management Area in Rockbridge County; portions of the George Washington & Jefferson National Forests; and lands held by The Nature Conservancy (NGO) and private landowners. Sampling units were classified as either "effects monitoring" (units slated to receive some type of forest management, such as prescribed burns or timber harvest), or "population monitoring" (units with no imminent management planned). Size and observer capacity prohibited surveying the entirety of each sampling unit; therefore, we worked with the AMJV to develop a sampling methodology to best capture bird community response to forest management over time, which we discussed with the VA project team at the region-wide monitoring planning meeting. 
+
+# Monitoring Effort
+
+## ARU Deployments
+
+We deployed automated recording units (ARUs) during both field seasons. In 2021, we successfully retrieved `r annual_arupoints[1, 2]` units; each unit was deployed for `r round(deployment_time[[1, 2]], 1)` days on average, generating a total of 3.5 TB of audio data. In 2022, we retrieved ARUs from `r annual_arupoints[2, 2]` points after an average deployment of `r round(deployment_time[[2, 2]], 1)` days, resulting in 917.9 GB of data. These data are banked for future analysis at UMCES and the Kitzes Lab.
+
+In 2021, we had high rates of ARU loss due to animals, presumably black bears, destroying or removing units (Figure \@ref(fig:aruphoto)). Twenty-one percent of all deployed units showed some evidence of animal damage. Bears seemed to be attracted to excessive flagging tape and obvious placement of the ARUs. We remedied this in 2022 by attaching units higher off the ground, concealing them with lightweight camouflage cloth, and using minimal flagging on a nearby tree. These changes successfully reduced ARU damage in 2022, with only four units showing evidence of damage (primarily bitten bags) and one unit lost. Several other units were damaged by water or failed to record for the full deployment period, though a portion of these still collected audio data.
+
+```{r aruphoto, fig.cap="Left: Flagging tape on a 2021 ARU deployment. Center: Typical bear damage to 2021 ARUs. Right: Improved concealment of ARU deployed in 2022.", fig.show = "hold", out.width = "30%"}
+
+knitr::include_graphics("Goshen10_ARU_MM_crop.jpg")
+knitr::include_graphics("BearDamage_MM_crop.jpg")
+knitr::include_graphics("burn_area_aru.jpg")
+```
+
+Distribution of ARUs by ownership type was mostly consistent between years, with the exception of federal ownership (Figure \@ref(fig:aruownership)). At federally owned plots, we deployed 84 ARUs in 2021 and 16 in 2022. Most of the 2021 deployments were at Potts, which we did not cover in 2022.
+
+```{r aruownership, fig.asp = 0.75, fig.cap = "Distribution of ARU units by land ownership type and year."}
+owner_all <-
+  aru_report |>
+  group_by(ownership, year(deployed)) |>
+  arrange(ownership) |>
+  select(point_id) |>
+  unique() |>
+  count()
+
+owner_dl <-
+  aru_report |>
+  group_by(ownership, year) |>
+  filter(
+    # Exclude non-recovered and non-deployed
+    !is.na(downloaded),        
+    !is.na(deployed)) |>  
+  arrange(ownership) |>
+  select(point_id) |>
+  unique() |>
+  count()
+
+ggplot(owner_dl, 
+  aes(
+    x = ownership, 
+    y = n, 
+    fill = as.factor(year))) +
+  geom_col(position = "dodge") +
+  labs(
+    x = "Ownership", 
+    y = "Count", 
+    fill = "Year",
+    title = "ARUs by land ownership and year") +
+  scale_fill_manual(values = c("gray75", "#317eac")) +
+  theme(legend.position = c(0.8, 0.8)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
+
+```
+
+
+## Point Count Surveys
+
+In 2021 we conducted `r count(filter(visits, year == 2021))` surveys at `r length(unique(filter(visits, year == 2021)$point_id))` total points, of which `r filter(n_visits, year == 2021, visits == 2)[[1, 3]]` were visited twice and `r filter(n_visits, year == 2021, visits == 1)[[1, 3]]` were visited only once. 
+In 2022 we again conducted `r count(filter(visits, year == 2022))` surveys but at `r length(unique(filter(visits, year == 2022)$point_id))` points, with more even coverage; all but one point was visited twice. In 2021, visits to a point were separated by `r filter(visit_interval, year == 2021)[[1, 2]]` days on average, while in 2022 we condensed the field season so visits were separated by `r filter(visit_interval, year == 2022)[[1, 2]]` days on average. Surveys were conducted by four trained observers (Table \@ref(tab:observers)). In 2022, Frostburg State University undergraduate interns A'Laurenye' McBeth and Atlee Wise assisted with field work; Atlee Wise performed several point counts after shadowing and practicing alongside our main observers. 
+
+```{r observers}
+visits |>  
+  summarize(
+    surveys = n(), 
+    .by = c(observer, year)) |> 
+  pivot_wider(names_from = year, values_from = surveys) |> 
+  mutate_all(~replace(., is.na(.), 0)) |> 
+  arrange(observer) |> 
+  kable(
+    col.names = c('Observer', '2021', '2022'),
+    caption = 'Number of point count surveys performed by each observer by year.') |> 
+kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)
+```
+
+The number of ARUs and point count locations was not always the same within a sampling unit (Table \@ref(tab:focalarus)). In 2022, three sampling units were dropped due to lack of time: Fed B, Bolar Mountain, and Potts. However, we added an additional 22 effects monitoring points at Goshen WMA, many of which were in a recently burned area and will provide information on the avian community post-prescribed fire at this location.
+
+```{r focalarus}
+# Generate a tibble of:
+# Plot, npoints surveyed, nARUs deployed, nspecies, nWOTH, nCERW, nGWWA
+
+summary_plots <-
+  
+  # Plots, points, species, birds
+  untidy_data |> 
+    summarize(
+      points = length(unique(point_id)),
+      .by = c(ownership, plot_name, plot_type, year)) |> 
+  arrange(ownership, plot_name, year) |> 
+  pivot_wider(
+    names_from = year, 
+    values_from = points, 
+    names_glue = "{.value}_{year}") |> 
+  
+  # Add # points occupied per plot/year/sp.
+  left_join(
+    untidy_data |> 
+      summarize(
+        occupied = length(unique(point_id)), 
+        .by = c(plot_name, species, year)) |>  
+      filter(species %in% c('WOTH', 'GWWA', 'CERW')) |>  
+      pivot_wider(
+        names_from = c(species, year),
+        values_from = occupied),
+    by = 'plot_name') |> 
+  mutate(
+    across(
+      where(is.numeric), 
+      ~replace_na(.x, 0)),
+    WOTH_2021 = WOTH_2021/points_2021,
+    WOTH_2022 = WOTH_2022/points_2022,
+    CERW_2021 = CERW_2021/points_2021,
+    CERW_2022 = CERW_2022/points_2022) |> 
+  
+  # Add number of ARUs COLLECTED per plot
+  left_join(
+    audiomoth_activity |> 
+      filter(action == "collected") |> 
+      distinct(point_id, year = year(date)) |> 
+      # Add point
+      left_join(
+        points |> 
+          select(point_id, plot_name),
+        by = join_by(point_id)) |> 
+      # Add plot
+      left_join(
+        plots |> 
+          select(plot_name),
+        by = 'plot_name') |>  
+      group_by(plot_name, year) |> 
+      # Get ARUs per plot
+      summarize(ARUs = n()) |> 
+      # Pivot wider
+      pivot_wider(
+        names_from = year,
+        values_from = ARUs,
+        names_prefix = "ARUs_"),
+    by = 'plot_name')
+
+# Display summary table
+kable(
+  summary_plots |> 
+    select(
+    ownership, 
+    plot_type,
+    plot_name, 
+    points_2021, points_2022, 
+    # WOTH_2021, WOTH_2022, 
+    # CERW_2021, CERW_2022, 
+    ARUs_2021, ARUs_2022) |> 
+    replace_na(list(ARUs_2021 = 0, ARUs_2022 = 0)) |> 
+    mutate_if(
+      is.numeric, format, digits = 2, nsmall = 0),
+  format = 'html',
+  col.names = c(
+    "Ownership", "Type", "Sampling unit", "Survey points (2021)", "Survey points (2022)", "ARUs (2021)", "ARUs (2022)"),
+  caption = 'Monitoring effort by sampling unit and year. Survey points are the number of points in each unit where point counts were conducted. ARUs is the number of automated recording units recovered from the field.') |> 
+kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)
+```
+
+
+# Species Detections
+
+Between both years, we observed `r length(unique(untidy_data$species))` bird species during point count surveys. The most abundant species were Red-eyed Vireo (*Vireo olivaceus*), Ovenbird (*Seiurus aurocapilla*), and Scarlet Tanager (*Piranga olivacea*), Figure \@ref(fig:topspecies). We observed a slightly lower abundance of Wood Thrush in 2022 compared to 2021. Complete species lists for each sampling unit can be found in [Appendix I].
+
+```{r topspecies, fig.asp = 0.9, fig.cap = 'Average abundance per survey of the most common species detected each year on point counts.', echo = FALSE, message = FALSE, warning = FALSE}
+counts_per_year <-
+  visits |> 
+  summarize(total_counts = length(unique(visit_id)), .by = year)
+
+abundance <-
+  untidy_data |> 
+    group_by(year, visit_id, species, .drop = FALSE) |> 
+    # Get count of each species each year
+    summarize(
+      count = n(),
+      .groups = 'drop') |> 
+    group_by(species, year) |> 
+    # Get total abundance, number of counts appearing on
+    summarize(
+      abundance = sum(count),
+      counts = n()) |> 
+    # Summarize presence
+  left_join(counts_per_year) |> 
+    mutate(
+      prop_counts_present = counts/total_counts,
+      avg_per_count = abundance/total_counts,
+      avg_if_present = abundance/counts)
+
+top_15 <-
+  abundance |> 
+    ungroup() |> 
+    select(species, year, abundance) |> 
+    pivot_wider(
+      names_from = year, 
+      values_from = abundance, 
+      names_prefix = 'abund_') |>
+  arrange(-abund_2022) |> 
+  slice(1:15) |> 
+  pull(species)
+
+# Graph avg abundance
+abundance |> 
+  filter(species %in% top_15 | species %in% c('CERW', 'WOTH', 'GWWA')) |> 
+  left_join(species_list, by = c('species' = 'banding_code')) |> 
+  ggplot(
+    aes(
+      x = reorder(common_name, avg_per_count), 
+      y = avg_per_count, 
+      fill = factor(year) |> reorder(-year))) +
+  geom_bar(
+    stat = 'identity', 
+    width = 0.75,
+    position = position_dodge(width = 0.7)) +
+  labs(
+    x = '',
+    y = 'Average abundance (birds/survey)',
+    fill = 'Year') +
+  scale_y_continuous(
+    limits = c(0, max(abundance$avg_per_count) + 0.1),
+    expand = c(0,0)) +
+  scale_fill_manual(values = c("#317eac", "gray75")) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.85, 0.15), 
+    legend.background = element_blank()) +
+  coord_flip()
+```
+
+We detected two of the three focal species during point count surveys: Wood Thrush and Cerulean Warbler (Table \@ref(tab:focaloccu)). No Golden-winged Warblers or *Vermivora* hybrids were detected during surveys, although one *Vermivora* sp. was heard outside of the count period at TNC Warm Springs Mountain Preserve in 2022 (NGO F). Wood Thrush was detected in nearly all plots, but Cerulean Warbler was restricted to three units: Fed C, in the George Washington & Jefferson National Forest near California, VA; NGO A, on the TNC property at Hobby Horse Farm Road south of Healing Springs; and State D, a slope near Lake Moomaw at T. M. Gathright WMA. A preview of point count data can be explored in [Appendix II].
+
+```{r focaloccu}
+# Display summary table
+kable(
+  summary_plots |> 
+    select(
+    ownership, 
+    plot_type,
+    plot_name, 
+    WOTH_2021, WOTH_2022,
+    CERW_2021, CERW_2022) |> 
+    mutate_if(is.numeric, format, digits = 2, nsmall = 0) |> 
+    mutate(
+        CERW_2022 = str_replace_all(string = CERW_2022, pattern = " NaN", replacement = "---"),
+        WOTH_2022 = str_replace_all(string = WOTH_2022, pattern = " NaN", replacement = "---")),
+  format = 'html',
+  col.names = c(
+    "Ownership", "Type", "Sampling unit", "WOTH\n(2021)", "WOTH\n(2022)", "CERW\n(2021)", "CERW\n(2022)"),
+  caption = 'Raw occupancy of focal species by sampling unit and year from point count surveys. Proportion occupancy was calculated as the proportion of points surveyed where the species was detected at least once. Empty cells indicate no point counts were performed at the plot that year.') |> 
+kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)
+```
+
+
+# Vegetation surveys
+
+We performed basic vegetation surveys at ARU deployment locations, which are intended to provide information on fine-scale habitat characteristics that may influence sound quality of the recordings. At each location, we measured the DBH of the tree to which the ARU was attached, the basal area of the surroundings (taken while standing at the ARU tree), the compass direction that the ARU faced, the angle of the slope in the direction the ARU faced, and a count of the number of small (<5 cm in diameter) and large (5-10 cm in diameter) shrubs and trees along a 5-meter transect extending in the direction the ARU faced. Figure \@ref(fig:veg2) shows the distributions of these vegetation values.
+
+```{r veg, fig.show = "hold", fig.asp = 1.5, out.width = "25%"}
+ggplot(veg_data, aes(x = dbh)) + 
+  geom_histogram(fill = "#317eac") + 
+  labs(x = "DBH of ARU tree (cm)") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  theme(
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 16)) 
+
+ggplot(veg_data, aes(x = basal_area)) + 
+  geom_histogram(fill = "#317eac") + 
+  labs(x = "Stand basal area", y = "")+
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  theme(
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 16))
+
+ggplot(veg_data, aes(x = slope)) + 
+  geom_histogram(fill = "#317eac") + 
+  labs(x = "Slope (downhill vs. uphill)", y = "")+
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  theme(
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 16))
+
+ggplot(veg_data, aes(x = bearing)) + 
+  geom_histogram(binwidth = 30, fill = "#317eac") + 
+  scale_x_continuous(
+    breaks = c(0, 90, 180, 270, 360),
+    labels = c("N\n0°", "E\n90°", "S\n180°", "W\n270°", "N\n360°")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "ARU compass direction", y = "")+
+  theme(
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 16))
+```
+
+```{r veg2, fig.show = "hold", out.width = "50%", fig.cap = "Distribution of vegetation and site characteristics at ARU deployment locations."}
+ggplot(veg_data, aes(x = stems_small)) + 
+  geom_histogram(fill = "#317eac") + 
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "Small stem density/transect")
+
+ggplot(veg_data, aes(x = stems_large)) + 
+  geom_histogram(binwidth = 1, fill = "#317eac") + 
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  labs(y = "", x = "Large stem density/transect")
+```
+
+
+# Maps of focal species abundance {.tabset}
+
+The following maps show the mean number of individuals per survey at each point by year. Colored blocks represent the sampling units, colored by ownership type. You can zoom, pan, and switch between topographic and satellite base layers in the panel to the left. To switch years, click to expand the layer panel on the left and hide or show that year's layer. Mouse over a point to see its name. Click on a point or sampling unit to see information about it.
+
+```{r map_setup}
+# Get summary by point
+
+map_data <- 
+  untidy_data |> 
+    # Get species count
+    group_by(point_id, year) |> 
+      summarize(
+        total_species = length(unique(species)),
+        WOTH = length(event_id[species == 'WOTH'])/2,
+        CERW = length(event_id[species == 'CERW'])/2) |> 
+    # Add plot name, lat, long
+    left_join(points, by = 'point_id') |> 
+    left_join(plots, by = 'plot_name') |> 
+    # Add ARU number at point
+    left_join(
+      arus_deployed,
+      by = join_by(point_id, year)) |> 
+  # Make it spatial
+  st_as_sf(
+    coords = c('long', 'lat'), crs = 4326)
+
+Data_2021 <-
+  map_data |> filter(year == 2021)
+
+Data_2022 <-
+  map_data |> filter(year == 2022)
+```
+
+## Wood Thrush
+
+```{r wothmap}
+woth_map <-
+  
+  # Basemap
+  tm_basemap(
+    c('Esri.WorldTopoMap',
+      'Esri.WorldImagery')) +
+    
+  # SAMPLING UNITS
+  tm_shape(sampling_units) +
+  tm_polygons(
+    col = 'ownership',
+    palette = c('#49D4B9', '#D1B7E1', '#FFFF99'),
+    alpha = 0.5,
+    id = 'name',
+    popup.vars =
+      c('Sampling unit' = 'name',
+        'Ownership' = 'ownership')) +
+
+  # SURVEY POINTS
+  tm_shape(Data_2021) +
+  tm_dots(
+    size = 0.07,
+    col = 'WOTH',
+    border.col = 'black',
+    palette = 'PuRd',
+    popup.vars =
+      c('Sampling unit' = 'plot_name',
+       'Ownership' = 'ownership',
+       'Monitoring type' = 'plot_type',
+       'ARU ID' = 'recorder_id',
+       'Total species' = 'total_species',
+       'WOTH abundance/survey' = 'WOTH'),
+    title = '2021 WOTH abundance',
+    colorNA = 'grey40',
+    textNA = 'ARU only',
+    clustering = FALSE) +
+  
+  tm_shape(Data_2022) +
+  tm_dots(
+    size = 0.07,
+    col = 'WOTH',
+    border.col = 'black',
+    palette = 'PuRd',
+    popup.vars =
+      c('Sampling unit' = 'plot_name',
+       'Ownership' = 'ownership',
+       'Monitoring type' = 'plot_type',
+       'ARU ID' = 'recorder_id',
+       'Total species' = 'total_species',
+       'WOTH abundance/survey' = 'WOTH'),
+    title = '2022 WOTH abundance',
+    colorNA = 'grey40',
+    textNA = 'ARU only',
+    clustering = FALSE)
+
+tmap_leaflet(woth_map, mode = 'view')
+```
+
+## Cerulean Warbler
+
+```{r cerwmap}
+cerw_map <-
+  
+  # Basemap
+  tm_basemap(
+    c('Esri.WorldTopoMap',
+      'Esri.WorldImagery')) +
+    
+  # SAMPLING UNITS
+  tm_shape(sampling_units) +
+  tm_polygons(
+    col = 'ownership',
+    palette = c('#49D4B9', '#D1B7E1', '#FFFF99'),
+    alpha = 0.5,
+    id = 'name',
+    popup.vars =
+      c('Sampling unit' = 'name',
+        'Ownership' = 'ownership')) +
+
+  # SURVEY POINTS
+  tm_shape(Data_2021) +
+  tm_dots(
+    size = 0.07,
+    col = 'CERW',
+    border.col = 'black',
+    palette = 'Blues',
+    popup.vars =
+      c('Sampling unit' = 'plot_name',
+       'Ownership' = 'ownership',
+       'Monitoring type' = 'plot_type',
+       'ARU ID' = 'recorder_id',
+       'Total species' = 'total_species',
+       'CERW abundance/survey' = 'CERW'),
+    title = '2021 CERW abundance',
+    colorNA = 'grey40',
+    textNA = 'ARU only',
+    clustering = FALSE) +
+  
+  tm_shape(Data_2022) +
+  tm_dots(
+    size = 0.07,
+    col = 'CERW',
+    border.col = 'black',
+    palette = 'Blues',
+    popup.vars =
+      c('Sampling unit' = 'plot_name',
+       'Ownership' = 'ownership',
+       'Monitoring type' = 'plot_type',
+       'ARU ID' = 'recorder_id',
+       'Total species' = 'total_species',
+       'CERW abundance/survey' = 'CERW'),
+    title = '2022 CERW abundance',
+    colorNA = 'grey40',
+    textNA = 'ARU only',
+    clustering = FALSE)
+
+tmap_leaflet(cerw_map, mode = 'view')
+```
+
+# Conclusion
+
+```{r out.width = '40%', out.extra = 'style = "float:right; padding:10px"'}
+knitr::include_graphics("cnmm_overlook_crop.jpg")
+```
+
+We conducted two successful seasons of point count surveys and deployed ARUs across multiple land ownership types in the AMJV Dynamic Forest Restoration Blocks. Throughout the process, we worked closely with partners from the American Bird Conservancy, Virginia Department of Wildlife Resources, The Nature Conservancy, and beyond to prioritize survey locations and coordinate site access. Consequently, we surveyed a number of remote areas; we hope this will
+provide a fuller picture of the forest bird community than if we had limited our efforts to easily accessible locations. The success of this fieldwork was due in no small part to the positive working relationship of the various federal, state, private, university, and NGO partners who are committed to monitoring and managing forest bird populations in Appalachia.
+
+In addition, we were able to provide valuable training in field data collection and data entry to two undergraduate interns from Frostburg State University. This allowed them to explore their interests and develop relevant skills for their future careers.
+
+To date, we have downloaded and transferred all ARU data to collaborators at the University of Pittsburgh. Members of Justin Kitzes’ lab are currently developing machine learning algorithms to classify avian vocalizations from the ARU recordings. In the future, we imagine they will be able to validate their species identification and distance algorithms using the data collected during point count surveys by human observers.
+
+For the three AMJV focal bird species, we collected additional information during point count surveys on the distance at which the individual was first detected and the minute(s) in which it was observed vocalizing. Our next steps with these data will be to model how landscape metrics and stand composition impact focal species. This will most likely take the form of occupancy models for Wood Thrush, though the data we collected is suitable for additional types of modeling as well.
+
+A list of all data provided alongside this report is available in [Appendix III].
+
+# Appendices
+
+## Appendix I {.tabset}
+Complete species lists for every plot surveyed, pooled across years.
+
+```{r spbyplot}
+species_by_plot <-
+  map(
+    1:length(unique(plots$plot_name)),
+    function(i) {
+      # Species by plot name:
+      plot_split <-
+        count_data |> 
+        select(visit_id, species) |> 
+        left_join(
+          visits |> 
+            select(point_id, visit_id), 
+          by = 'visit_id') |> 
+        left_join(
+          points |> 
+            select(point_id, plot_name), 
+          by = 'point_id') |> 
+          
+          # Separate by plot
+          filter(plot_name == unique(plots$plot_name)[i]) |> 
+          
+          # Add species names
+          left_join(
+            species_list |> 
+              select(sci_name, common_name, banding_code, taxon_order), 
+            by = c('species' = 'banding_code')) |> 
+          
+          # Order and generate compact list of unique species
+          arrange(taxon_order) |> 
+          select(common_name, sci_name) |> 
+          unique()
+    }) |> 
+  # Name list elements by plot
+  set_names(unique(plots$plot_name))
+```
+
+### Boiling Springs 
+Boiling Springs: Effects
+```{r}
+kable(
+  species_by_plot$`Boiling Springs`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### Bolar Mountain
+Bolar Mountain: Effects
+
+T.M. Gathright WMA
+```{r}
+kable(
+  species_by_plot$`Bolar Mountain`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### Goshen Effects
+Goshen: Effects
+
+Goshen WMA (Gochenour Branch)
+```{r}
+kable(
+  species_by_plot$`Goshen Effects`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### Meadowgrounds 
+Meadowgrounds: Effects
+
+Goshen WMA
+```{r}
+kable(
+  species_by_plot$`Meadowgrounds`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### Potts
+Potts: Effects
+
+G.W. National Forest
+```{r}
+kable(
+  species_by_plot$`Potts`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### Fed B
+Fed B: Population
+
+Hoover Ridge (Little Mountain)
+```{r}
+kable(
+  species_by_plot$`Fed B`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T) |> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### Fed C
+Fed C: Population
+
+Rockbridge Alum Springs Rd.
+```{r}
+kable(
+  species_by_plot$`Fed C`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T) |> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### Fed E
+Fed E: Population
+
+Open Trail N
+```{r}
+kable(
+  species_by_plot$`Fed E`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### Fed Over
+Fed Oversample: Population
+
+Open Trail S
+```{r}
+kable(
+  species_by_plot$`Fed Over`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+
+### NGO A
+NGO A: Population
+
+Hobby Horse Farm Rd.
+```{r}
+kable(
+  species_by_plot$`NGO A`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### NGO B
+NGO B: Population
+
+Skyline Dr.
+```{r}
+kable(
+  species_by_plot$`NGO B`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### NGO C
+NGO C: Population
+
+Mare Run Rd.
+```{r}
+kable(
+  species_by_plot$`NGO C`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### NGO E
+NGO E: Population
+
+Jordan Run Rd.
+```{r}
+kable(
+  species_by_plot$`NGO E`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### NGO F
+NGO F: Population
+
+Airport Rd.
+```{r}
+kable(
+  species_by_plot$`NGO F`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+
+### State A
+State A: Population
+
+Gochenour Branch (Goshen WMA)
+```{r}
+kable(
+  species_by_plot$`State A`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### State B
+State B: Population
+
+Dale Mountain (Goshen WMA)
+```{r}
+kable(
+  species_by_plot$`State B`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### State D
+State D: Population
+
+Lake Moomaw (T.M. Gathright WMA)
+```{r}
+kable(
+  species_by_plot$`State D`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### State E
+State E: Population
+
+Clay Lick Hollow (T.M. Gathright WMA)
+```{r}
+kable(
+  species_by_plot$`State E`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### State F
+State F: Population
+
+High Top Tower Road (T.M. Gathright WMA)
+```{r}
+kable(
+  species_by_plot$`State F`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T)|> 
+  scroll_box(width = "500px", height = "500px")
+```
+### State Over
+State Oversample: Population
+
+Meadowlick Hollow (T.M. Gathright WMA)
+```{r}
+kable(
+  species_by_plot$`State Over`,
+  format = 'html',
+  col.names = c('Common name', 'Scientific name')) |> 
+column_spec(2, italic = T)|> 
+  kableExtra::kable_styling('striped', full_width = F, fixed_thead = T) |> 
+  scroll_box(width = "500px", height = "500px")
+```
+
+
+## Appendix II
+Preview of bird survey data. See attached files for full data.
+
+```{r}
+DT::datatable(
+  untidy_data |> 
+    mutate(date = as.Date(date), start_time = format(start_time, format = "%H:%M")) |> select(plot_name, point_id, date, visit, start_time, observer, species, dist_interval, time_interval, bird_note),
+  options = list(
+  initComplete = JS(
+    "function(settings, json) {",
+    "$(this.api().table().header()).css({'background-color': '#317EAC', 'color': '#fff'});",
+    "}")
+))
+```
+
+## Appendix III
+List of all data files provided alongside this report. Please click on the arrow to see a description of their columns. 
+
+<details> <summary> Plots </summary>
+
+-The names of the sampling units.
+
+```{r}
+kable(
+  tibble(column = names(plots)) |> left_join(metadata),
+  format = 'html',
+  col.names = c("Column name", "Meaning"))
+```
+</details>
+
+<details> <summary> Points </summary>
+
+-Points surveyed within sampling units.
+
+```{r}
+kable(
+  tibble(column = names(points)) |> left_join(metadata),
+  format = 'html',
+  col.names = c("Column name", "Meaning"))
+```
+</details>
+
+<details> <summary> Visits </summary>
+
+-Information about each point count.
+
+```{r}
+kable(
+  tibble(column = names(visits)) |> left_join(metadata) |> filter(column != "year"),
+  format = 'html',
+  col.names = c("Column name", "Meaning"))
+```
+</details>
+
+<details> <summary> Count Data </summary>
+
+-Individual bird detections, including focal species detection information.
+
+```{r}
+kable(
+  tibble(column = names(count_data)) |> left_join(metadata),
+  format = 'html',
+  col.names = c("Column name", "Meaning"))
+```
+</details>
+
+<details> <summary> Audiomoths </summary>
+
+-A summary of all audiomoth units, including configuration information.
+
+```{r}
+kable(
+  tibble(column = names(audiomoths)) |> left_join(metadata),
+  format = 'html',
+  col.names = c("Column name", "Meaning"))
+```
+</details>
+
+<details> <summary> Audiomoth Activity </summary>
+
+-"Long" format audiomoth activity data with deployments, collections, data downloads. Wide format available separately (see "Other Information")
+
+```{r}
+kable(
+  tibble(column = names(audiomoth_activity)) |> left_join(metadata) |> filter(column != "year"),
+  format = 'html',
+  col.names = c("Column name", "Meaning"))
+```
+</details>
+
+</details>
+
+<details> <summary> Veg Data </summary>
+
+-Vegetation survey data.
+
+```{r}
+kable(
+  tibble(column = names(veg_data)) |> left_join(metadata),
+  format = 'html',
+  col.names = c("Column name", "Meaning"))
+```
+</details>
+
+<details> <summary> Metadata </summary>
+- Description of column names and their meaning within the amjv_data_entry_tidy database.
+</details>
+
+<details> <summary> Other information </summary>
+- [Google Sheets database](https://docs.google.com/spreadsheets/d/1-exm7TybBaaYT6d5fq9vTteLApFY24uV4ymnLMYuMWI/edit?usp=sharing)
+- [Field protocols, signage, and datasheets](https://drive.google.com/drive/u/0/folders/1tL1alSLiVAjGN-3cyD4s4Oxwq7xXSLvh)
+- "Wide format" ARU database with each deployment and all activity dates
+- [GitHub](https://github.com/mlmassa/amjv_monitoring): code to import and analyze data
+</details>
+
+<br>
+<br>
+Interactive HTML document created by Megan Massa  
+Contact: [Megan.Massa@UMCES.edu](mailto:megan.massa@umces.edu)  
