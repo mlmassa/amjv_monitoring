@@ -41,8 +41,8 @@ plots <-
 bbox_large <-
   points |> 
   left_join(st_drop_geometry(plots)) |> 
-  # Get 6km buffer
-  st_buffer(dist = 6000) |> 
+  # Get buffer
+  st_buffer(dist = 10000) |> 
   st_bbox()
 
 # Get small bbox (no Potts)
@@ -54,6 +54,33 @@ bbox_small <-
   st_buffer(dist = 3000) |> 
   st_bbox()
 
+# Get Potts only bbox
+bbox_potts <-
+  points |> 
+  filter(plot_name == "Potts") |> 
+  left_join(st_drop_geometry(plots)) |> 
+  # Get buffer
+  st_buffer(dist = 2000) |> 
+  st_bbox()
+
+# Get Gathright bbox
+bbox_gathright <-
+  points |> 
+  left_join(st_drop_geometry(plots)) |> 
+  filter(block == "Gathright", plot_name != "Potts") |> 
+  # Get buffer
+  st_buffer(dist = 3000) |> 
+  st_bbox()
+
+# Get Goshen bbox
+bbox_goshen <-
+  points |> 
+  left_join(st_drop_geometry(plots)) |> 
+  filter(block == "Goshen", plot_name != "Potts") |> 
+  # Get buffer
+  st_buffer(dist = 2000) |> 
+  st_bbox()
+
 # Ecozone -----------------------------------------------------------------
 
 ecozone_xwalk <-
@@ -61,6 +88,7 @@ ecozone_xwalk <-
 
 ecozone_rast <-
   rast("data/raw/Cropped_Raster/AppRidges_cropped.tif") |> 
+  # Reclassify ecozone to fewer categories using crosswalk
   classify(rcl = as.matrix(select(ecozone_xwalk, Value, New_Value)))
 
 names(ecozone_rast) <- "New_Value"
@@ -70,7 +98,7 @@ levels(ecozone_rast) <-
   distinct(ecozone_xwalk, New_Value, GWNF_model) |> 
   arrange(New_Value)
 
-# Re-run extraction
+# Run extraction
 ecozone <-
   points |> 
   mutate(
@@ -106,25 +134,33 @@ nlcd_forest <-
       as.matrix())
 
 # Transform and buffer points for extraction
-radius <-
-  1609 # 1 mi
-  #2000 # 2 km
-  #5000 # 5 km
-  
-points_buff <- 
-  st_transform(points, crs = st_crs(nlcd)) |> 
-  st_buffer(dist = radius) 
+radii <-
+  c(1500, # A little less than 1 mile
+    5000) # 5 km
 
 # Perform extraction
 forest <-
-  points |> 
-  mutate(
-    extract(
-      x = nlcd_forest,
-      y = vect(points_buff),
-      fun = mean,
-      ID = F)) |> 
-  rename(for_1mi = Class)
+  map(
+    radii,
+    ~ points |> 
+      mutate(
+        extract(
+          x = nlcd_forest,
+          y = points |> 
+            st_transform(crs = st_crs(nlcd_forest)) |> 
+            st_buffer(dist = .x) |> 
+            vect(),
+          fun = mean,
+          ID = F)) |> 
+      mutate(radius = .x) |> 
+      select(point_id, forest = Class, radius)) |> 
+  list_rbind() |> 
+  tibble() |> 
+  select(-geometry) |> 
+  pivot_wider(
+    names_from = radius,
+    names_prefix = "for_",
+    values_from = forest)
 
 # Landscape metrics -------------------------------------------------------
 
@@ -137,7 +173,8 @@ check_landscape(nlcd_forest)
 metrics <-
   extract_lsm(
     landscape = nlcd_forest,
-    y = points |> 
+    y = 
+      points |> 
       st_transform(crs = st_crs(nlcd_forest)) |> 
       select(geometry),
     extract_id = points$point_id,
@@ -154,6 +191,12 @@ metrics <-
   rename(point_id = extract_id)
 
 # Point-buffer metrics
+
+# Set edge density radius
+points_buff <-
+  st_transform(points, crs = st_crs(nlcd)) |>
+  st_buffer(dist = 1500)
+
 # Get edge density within buffer radius
 ed <-
   map(
@@ -166,7 +209,7 @@ ed <-
       count_boundary = F)) |> 
   bind_rows() |> 
   mutate(point_id = points_buff$point_id) |> 
-  select(point_id, ed_1mi = value)
+  select(point_id, ed_buff = value)
 
 # Distance to stream ------------------------------------------------------
 
@@ -176,38 +219,18 @@ streams <-
   st_transform(crs = st_crs(points)) |> 
   st_crop(st_as_sfc(bbox_large))
 
-# Water area features
+# Water area features from tigris
+# I could use VA DCR but only Moomaw is needed, plus I will use these
+# for making a map later
 water_area <-
   bind_rows(
     # Focal areas
     area_water(
       state = "VA", 
-      county = "Rockbridge"),
-    area_water(
-      state = "VA", 
-      county = "Bath"),
-    area_water(
-      state = "VA", 
-      county = "Alleghany"),
-    # Other areas that will appear on map
-    area_water(
-      state = "VA", 
-      county = "Covington"),
-    area_water(
-      state = "VA", 
-      county = "Botetourt"),
-    area_water(
-      state = "VA", 
-      county = "Craig"),
+      county = c("Rockbridge", "Bath", "Alleghany", "Covington", "Botetourt", "Craig")),
     area_water(
       state = "WV", 
-      county = "Greenbrier"),
-    area_water(
-      state = "WV", 
-      county = "Monroe"),
-    area_water(
-      state = "WV", 
-      county = "Pocahontas")) |>
+      county = c("Greenbrier", "Monroe", "Pocahontas"))) |>
   st_transform(crs = st_crs(points))
 
 # Calculate distance to stream
@@ -239,19 +262,77 @@ d_stream <-
 canopy_rast <-
   rast("data/raw/canopyheight.tif")
 
+canopy_rast_potts <-
+  rast("data/raw/canopyheight_potts.tif")
+
 # Canopy height (avg. within 50m)
 canopy <-
-  points |> 
-  mutate(
-    extract(
-      x = canopy_rast,
-      y = 
-        points |> 
-        st_transform(crs = st_crs(canopy_rast)) |> 
-        st_buffer(dist = 50) |> 
-        vect(),
-      fun = mean,
-      ID = F)) 
+  bind_rows(
+    # Non-Potts points
+    filter(points, plot_name != "Potts") |> 
+    mutate(
+      extract(
+        x = canopy_rast,
+        y = 
+          filter(points, plot_name != "Potts") |> 
+          st_transform(crs = st_crs(canopy_rast)) |> 
+          st_buffer(dist = 50) |> 
+          vect(),
+        fun = mean,
+        ID = F)),
+    # Potts points
+    filter(points, plot_name == "Potts") |> 
+    mutate(
+      extract(
+        x = canopy_rast_potts,
+        y = 
+          points |> 
+          filter(plot_name == "Potts") |> 
+          st_transform(crs = st_crs(canopy_rast_potts)) |> 
+          st_buffer(dist = 50) |> 
+          vect(),
+        fun = mean,
+        ID = F)) |> 
+    rename(canopyheight = canopyheight_potts)
+  )
+
+cv <-
+  function(x, na.rm = T) {sd(x, na.rm = na.rm) / mean(x, na.rm = na.rm)}
+
+p_potts <-
+  filter(points, plot_name == "Potts")
+
+p_notpotts <-
+  filter(points, plot_name != "Potts")
+
+cv_rast <-
+  function(points, layer) {
+    points |> 
+    mutate(canopycv = 
+      map(
+        1:nrow(points),
+        ~ crop(
+            layer,
+            points[.x ,] |> 
+              st_transform(crs = st_crs(layer)) |> 
+              st_buffer(dist = 100) |> 
+              vect(),
+            mask = T) |> 
+          values() |> 
+          c() |> 
+          cv()) |> 
+        list_c())
+  }
+
+canopy_cv <-
+  bind_rows(
+    cv_rast(p_potts, canopy_rast_potts),
+    cv_rast(p_notpotts, canopy_rast))
+
+canopy <-
+  canopy |> 
+  left_join(st_drop_geometry(canopy_cv))
+
 
 # Export spatial covariates -----------------------------------------------
 
@@ -264,7 +345,10 @@ spat_covs <-
   left_join(canopy) |> 
   rename(
     ecozone = GWNF_model,
-    h_canopy = canopyheight)
+    canopy_h = canopyheight,
+    canopy_cv = canopycv) |> 
+  st_drop_geometry() |> 
+  select(-geometry)
 
 write_rds(spat_covs, "data/processed/spat_covs.rds")
 
@@ -288,8 +372,17 @@ counties <-
 ## Main roads ----
 roads <-
   bind_rows(
-    primary_secondary_roads(state = "VA"),
-    primary_secondary_roads(state = "WV")) |> 
+    roads(
+      state = "VA", 
+      county = c("Rockbridge", "Bath", "Alleghany", "Covington", "Botetourt", "Craig")),
+    roads(
+      state = "WV",
+      county = c("Greenbrier", "Monroe", "Pocahontas"))) |> 
+  filter(MTFCC %in% c("S1100", "S1200", "S1400", "S1500", "S1740")) |>
+  mutate(
+    MTFCC = factor(
+      MTFCC, 
+      labels = c("Primary", "Secondary", "Local", "4WD", "Logging"))) |> 
   st_transform(crs = st_crs(points)) |> 
   st_crop(bbox_large)
 
@@ -299,49 +392,23 @@ water_line <-
     # Focal areas
     linear_water(
       state = "VA", 
-      county = "Rockbridge"),
-    linear_water(
-      state = "VA", 
-      county = "Bath"),
-    linear_water(
-      state = "VA", 
-      county = "Alleghany"),
-    # Other areas that will appear on map
-    linear_water(
-      state = "VA", 
-      county = "Covington"),
-    linear_water(
-      state = "VA", 
-      county = "Botetourt"),
-    linear_water(
-      state = "VA", 
-      county = "Craig"),
+      county = c("Rockbridge", "Bath", "Alleghany", "Covington", "Botetourt", "Craig")),
     linear_water(
       state = "WV", 
-      county = "Greenbrier"),
-    linear_water(
-      state = "WV", 
-      county = "Monroe"),
-    linear_water(
-      state = "WV", 
-      county = "Pocahontas")) |>
+      county = c("Greenbrier", "Monroe", "Pocahontas"))) |>
   st_transform(crs = st_crs(points))
 
 ## Hillshade ----
-# Set hillshade palette
-grays <- 
-  colorRampPalette(c("gray65", "gray98"))
-
 # Get vector of hillshade colors
 pal_gray <- 
-  grays(1000)
+  hcl.colors(1000, "Grays")
 
 # Download elevation raster
 elev_large <-
   get_elev_raster(
     as_Spatial(st_as_sfc(bbox_large)), 
     neg_to_na = T, # Large negative numbers: eliminate
-    z = 11) |> # Zoom level
+    z = 13) |> # Zoom level
   # Downloads as raster; convert to terra
   rast()
 
@@ -352,26 +419,49 @@ hill_large <-
     terrain(elev_large, "aspect", unit = "radians"), 
     30, 270)
 
-# Scale raster to # of colors in gray palette
-index_large <- 
-  hill_large |> 
+## Protected areas ----
+prot_areas <-
+  st_read("data/processed/prot_areas.shp") |> 
+  st_transform(crs = st_crs(hill_large)) |> 
+  filter(
+    str_detect(
+      loc_nam, 
+      "Wildlife Management Area|National Forest|State Forest")) |> 
+  mutate(loc_nam = str_remove_all(loc_nam, "T.M. ")) |> 
+  st_crop(bbox_large) |> 
+  group_by(loc_nam) |> 
+  summarize() |> 
   mutate(
-    index_col = scales::rescale(hillshade, to = c(1, length(pal_gray)))) |>
-  mutate(index_col = round(index_col)) |> 
-  pull(index_col)
-
-# Set color palette of hillshade
-vector_cols_large <- 
-  pal_gray[index_large]
+    category = case_when(
+      str_detect(loc_nam, "Wildlife Management Area") ~ "WMA",
+      str_detect(loc_nam, "State Forest") ~ "State Forest",
+      str_detect(loc_nam, "National Forest") ~ "National Forest")) |> 
+  # These overlap with a NF or are not relevant
+  filter(
+    category != "State Forest",
+    !str_detect(loc_nam, "Rimel|Neola"))
 
 # Plot --------------------------------------------------------------------
 
 # Which to plot
-bbox <- bbox_small
-bbox <- bbox_large
+bbox <- 
+  counties |> 
+  filter(
+    NAME %in% c("Highland", "Bath", "Alleghany", "Craig", 
+                "Botetourt", "Rockbridge", "Augusta")) |> 
+  st_bbox()
+
+bbox <- 
+  bbox_gathright
+
+bbox <- 
+  bbox_goshen
+
+bbox <- 
+  bbox_potts
 
 # Set water color
-water_col <- "cornflowerblue"
+water_col <- "#0978AB"
 
 # Create plot labels
 plot_labels <-
@@ -379,86 +469,139 @@ plot_labels <-
   group_by(plot_name) |> 
   summarise(geometry = st_union(geometry))
 
-# Attempt to fix label text size.
-# Not sure if this works
-text_size_pt <- 6
-text_size <- text_size_pt * 0.352777777777777
-update_geom_defaults("label", list(size = text_size))
-update_geom_defaults("text", list(size = text_size))
+# Set color scale of raster, and make it smaller
+hill_small <-
+  hill_large |> 
+  crop(
+    bbox |> 
+      st_as_sfc() |> 
+      vect(),
+    mask = T)
 
-ggplot() +
-  ## Hillshade ----
+# Scale raster to # of colors in gray palette
+index_small <- 
+  hill_small |> 
+  mutate(
+    index_col = scales::rescale(hillshade, to = c(1, length(pal_gray)))) |>
+  mutate(index_col = round(index_col)) |> 
+  pull(index_col)
+
+# Set color palette of hillshade
+vector_cols_small <- 
+  pal_gray[index_small]
+
+# Set road scales
+road_scales <- c(0.1, 0.65, 0.2, 0.2, 0)
+
+gc();ggplot() +
+## Hillshade ----
   geom_spatraster(
-    data = hill_large, 
-    fill = vector_cols_large, 
+    data = hill_small,
+    fill = vector_cols_small,
     maxcell = Inf,
     alpha = 1) +
-  ## Water area ----
+## Elevation ----
+  geom_spatraster(
+    data = elev_large) +
+  scale_fill_whitebox_c(
+    palette = "gn_yl",
+    alpha = 0.5) +
+## NF/WMA ----
+  # geom_sf(
+  #   data = prot_areas |> filter(category == "National Forest"),
+  #   fill = alpha("purple", 0.2),
+  #   color = "purple",
+  #   linewidth = 0.5) +
+  # geom_sf(
+  #   data = prot_areas |> filter(category == "WMA"),
+  #   fill = alpha("yellow", 0.2),
+  #   color = "yellow",
+  #   linewidth = 0.5) +
+## Water area ----
   geom_sf(
-    data = water_area |> st_transform(crs = st_crs(hill_large)),
+    data = water_area,
     fill = water_col,
     color = water_col,
     alpha = 0.9) +
-  ## Water linear ----
+## Water linear ----
+  # geom_sf(
+  #   data = water_line,
+  #   color = water_col,
+  #   linewidth = 0.1,
+  #   alpha = 0.9) +
   geom_sf(
-    data = water_line |> st_transform(crs = st_crs(hill_large)),
+    data = streams,
     color = water_col,
-    linewidth = 0.1,
-    alpha = 0.9) +
+    linewidth = 0.25,
+    alpha = 0.85) +
+## Roads ----
   geom_sf(
-    data = streams |> st_transform(crs = st_crs(hill_large)),
-    color = water_col,
-    linewidth = 0.1,
-    alpha = 0.65) +
-  ## Roads ----
-  geom_sf(
-    data = roads |> st_transform(crs = st_crs(hill_large)),
+    data = roads, #|> 
+      #filter(MTFCC %in% c("Primary", "Secondary", "Local"), RTTYP != "M"),
     # Scale line width width by road type
     aes(linewidth = MTFCC),
     color = "white") +
-  scale_linewidth_manual(values = c(0.6, 0.3), guide = "none") +
-  ## Counties ----
+  scale_linewidth_manual(values = road_scales, guide = "none") +
+## Counties ----
   geom_sf(
-    data = counties |> st_transform(crs = st_crs(hill_large)), 
+    data = counties, 
     fill = NA,
     color = alpha("gray30", 0.8),
     linetype = "dashed",
-    linewidth = 0.2) +
-  ## US state borders ----
+    linewidth = 0.3) +
+## US state borders ----
   geom_sf(
-    data = states |> st_transform(crs = st_crs(hill_large)), 
+    data = states, 
     fill = NA,
-    linewidth = 0.25,
+    linewidth = 0.6,
     color = "gray30") +
-  ## Plots ----
+## Plots ----
   geom_sf(
-    data = plots |> st_transform(crs = st_crs(hill_large)), 
-    aes(color = ownership),
-    linewidth = 0.25,
+    data = plots,
+    linewidth = 0.5,
+    alpha = 0.9,
+    color = "yellow",
     fill = NA) +
-  ## Plot labels ----
-  ggrepel::geom_label_repel(
-    data = plot_labels |> st_transform(crs = st_crs(hill_large)) 
-    # |> 
-    #   filter(plot_name != "Potts")
-    ,
-    aes(label = plot_name, geometry = geometry),
-    stat = "sf_coordinates",
-    size = 2,
-    label.padding = 0.2,
-    force_pull = 0.85,
-    min.segment.length = unit(0.2, "inches")) +
-  ## Points ----
+## Points ----
   geom_sf(
-    data = points |> 
-      left_join(st_drop_geometry(plots)) |> 
-      st_transform(crs = st_crs(hill_large)),
+    data = points |>
+      left_join(st_drop_geometry(plots)),
+    fill = "black",
+    color = "white",
     aes(shape = plot_type),
-    color = "black", 
-    size = 0.7) +
-  scale_shape_manual(values = c(3, 20)) +
-  ## Theme ----
+    size = 1.5,
+    stroke = 0.25) +
+  scale_shape_manual(values = c(24, 21)) +
+## Inset maps ----
+  # geom_sf(
+  #   data = st_as_sfc(bbox_potts),
+  #   fill = NA,
+  #   col = "orange",
+  #   linewidth = 1) +
+  # geom_sf(
+  #   data = st_as_sfc(bbox_gathright),
+  #   fill = NA,
+  #   col = "orange",
+  #   linewidth = 1) +
+  # geom_sf(
+  #   data = st_as_sfc(bbox_goshen),
+  #   fill = NA,
+  #   col = "orange",
+  #   linewidth = 1) +
+## Scale bar ----
+  ggspatial::annotation_scale(
+    style = "ticks",
+    location = "br") +
+  ggspatial::annotation_north_arrow(
+    style = ggspatial::north_arrow_orienteering(
+      text_col = NA,
+      fill = c("black", "black")),
+    width = unit(0.3, "cm"),
+    height = unit(0.5, "cm"),
+    location = "tr") +
+## Theme ----
   theme_void() +
+  guides(fill = "none") +
   coord_sf(
     xlim = c(bbox$xmin, bbox$xmax),
     ylim = c(bbox$ymin, bbox$ymax),
@@ -469,14 +612,91 @@ ggplot() +
     shape = "",
     linewidth = "") +
   theme(
-    panel.background = element_rect(fill = "#F1F3F4"),
+    panel.background = element_rect(fill = "#a9bf99"),
     legend.position = "top",
     panel.border = element_rect(fill = NA))
 
 ## Save plot ----
 ggsave(
-  "output/plots/map.png",
-  width = 7.5,
-  height = 7,
+  "output/plots/map_potts.png",
+  width = 0.48 * 7.5,
+  height = 6,
   units = "in",
   dpi = "retina")
+
+
+
+# Janky ecozone map (ignore) ----------------------------------------------
+
+zonemap <- function(plot) {
+  ggplot() + 
+    geom_spatraster(
+      data = 
+        ecozone_rast |> 
+        crop(
+          plots |> 
+          filter(plot_name == plot) |> 
+          st_transform(
+            crs = st_crs(ecozone_rast)) |> 
+            vect()),
+      maxcell = Inf) + 
+    scale_fill_manual(
+    values = c(
+      "gray80", "forestgreen", "violet", "lightgreen", 
+      "lightgoldenrod1", "#0978AB", "turquoise3", "white"),
+    labels = c(
+      "barrens", "cove", "dry oak-heath", "dry pine-oak", 
+      "dry-mesic oak", "floodplains", "mesic oak", "unknown"), 
+    drop = FALSE) +
+    labs(
+      title = paste0("\n", plot),
+      subtitle = 
+        str_replace(filter(plots, plot_name == plot)$plot_description, "Road", "Rd."),
+      fill = "Ecozone") +
+    theme_void() +
+    theme(
+      legend.position = "bottom",
+      plot.subtitle = element_text(size = 8),
+      panel.border = element_rect(
+        fill = NA, color = "black", linewidth = 0.75)) +
+    geom_sf(
+      data = points |> filter(plot_name == plot), 
+      shape = 1, size = 3, stroke = 1.25) +
+    coord_sf(expand = F)
+}
+
+plot_list <- list()
+plots_to_plot <- 
+  plots |> filter(plot_type == "Population") |> pull(plot_name) |> unique()
+
+for(i in 1:length(plots_to_plot)) {
+  plot_list[[i]] <- zonemap(plots_to_plot[[i]])}
+
+library(ggpubr)
+
+arranged_plots <- 
+  ggarrange(
+    plot_list[[1]], 
+    plot_list[[2]],
+    plot_list[[3]],
+    plot_list[[4]],
+    plot_list[[5]],
+    plot_list[[6]],
+    plot_list[[7]],
+    plot_list[[8]],
+    plot_list[[9]],
+    plot_list[[10]],
+    plot_list[[11]],
+    plot_list[[12]],
+    plot_list[[13]],
+    plot_list[[14]],
+    plot_list[[15]],
+    nrow = 5, ncol = 3,
+    common.legend = T)
+
+arranged_plots
+ggsave(
+  filename = "output/plots/ecozone_comboplots.png",
+  width = 6, height = 10, units = "in", dpi = "retina")
+
+

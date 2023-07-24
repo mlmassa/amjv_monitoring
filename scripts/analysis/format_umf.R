@@ -7,8 +7,13 @@ library(suncalc)
 library(unmarked)
 
 theme_set(
-  theme_minimal(base_size = 11) +
-    theme(strip.background = element_blank()))
+  theme_bw(base_size = 11) +
+  theme(
+    axis.ticks = element_line(color = "gray"),
+    panel.border = element_rect(fill = NA, color = "gray"),
+    panel.grid.major = element_line(color = "gray95"),
+    panel.grid.minor = element_blank(),
+    strip.background = element_blank()))
 
 # Set parameters
 focal_spp <- 
@@ -35,7 +40,11 @@ plots <-
 veg <- 
   read_rds("data/raw/amjv_data.rds")$veg_data
 
-# Subset to relevant variables
+spat_covs <-
+  read_rds("data/processed/spat_covs.rds") |> 
+  sf::st_drop_geometry()
+
+# Fix the time and get sunrise
 timefix <-
   visits |> 
   select(point_id, visit_id, date, start_time) |> 
@@ -97,7 +106,10 @@ annual_points <-
 detections <-
   birds |> 
   # No flyover detections: birds in habitat only
-  filter(flyover == 0) |> 
+  filter(
+    flyover == 0,
+    dist_interval < 5) |> 
+  # Only birds within count circle
   # For each species at each pointxyearxvisit...
   group_by(point_id, year, visit, species) |> 
   # Get abundance
@@ -127,12 +139,15 @@ detections |>
   filter(!is.na(abund)) |> 
   ggplot() + 
   geom_bar(aes(x = factor(abund))) + 
-  facet_wrap(vars(species)) +
-  labs(x = "Abundance (birds/survey)")
+  facet_wrap(vars(species), scales = "free_y") +
+  labs(x = "Abundance (birds/survey)", y = "Surveys") +
+  coord_cartesian(expand = T, clip = "off")
+
+write_rds(detections, "data/processed/detections.rds")
 
 ggsave(
   "output/plots/focal_abund.png",
-  width = 6, height = 5, units = "in", dpi = 300)
+  width = 6, height = 5, units = "in", dpi = "retina")
 
 # Plot occupancy
 detections |> 
@@ -140,11 +155,12 @@ detections |>
   ggplot() + 
   geom_bar(aes(x = factor(det))) + 
   facet_wrap(vars(species)) +
-  labs(x = "Detected")
+  labs(x = "Detected", y = "Surveys") +
+  coord_cartesian(expand = T, clip = "off")
 
 ggsave(
   "output/plots/focal_det.png",
-  width = 6, height = 5, units = "in", dpi = 300)
+  width = 6, height = 5, units = "in", dpi = "retina")
 
 occupancy <-
   detections |> 
@@ -160,6 +176,8 @@ occupancy <-
     names_sep = '_') |> 
   unite("point_year", c(point_id, year), remove = T) |> 
   arrange(point_year, species)
+
+write_rds(occupancy, "data/processed/occupancies.rds")
 
 abundance <-
   detections |> 
@@ -194,7 +212,7 @@ ggplot(data = visits) +
 
 ggsave(
   "output/plots/observer.png",
-  width = 3.5, height = 3.5, units = "in", dpi = 300)
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
 
 observer <-
   visits |> 
@@ -223,7 +241,7 @@ ggplot(data = visits) +
 
 ggsave(
   "output/plots/wind.png",
-  width = 3.5, height = 3.5, units = "in", dpi = 300)
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
 
 wind <-
   visits |> 
@@ -252,7 +270,7 @@ ggplot(data = visits |> filter(!is.na(temp))) +
 
 ggsave(
   "output/plots/temp.png",
-  width = 3.5, height = 3.5, units = "in", dpi = 300)
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
 
 temp <-
   visits |> 
@@ -280,7 +298,7 @@ ggplot(data = visits) +
 
 ggsave(
   "output/plots/precip.png",
-  width = 3.5, height = 3.5, units = "in", dpi = 300)
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
 
 precip <-
   visits |> 
@@ -309,7 +327,7 @@ ggplot(data = visits) +
 
 ggsave(
   "output/plots/cloud.png",
-  width = 3.5, height = 3.5, units = "in", dpi = 300)
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
 
 cloud <-
   visits |> 
@@ -339,7 +357,7 @@ ggplot(data = visits) +
 
 ggsave(
   "output/plots/start_sun.png",
-  width = 3.5, height = 3.5, units = "in", dpi = 300)
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
 
 start_sun <-
   visits |> 
@@ -371,7 +389,7 @@ ggplot(
 
 ggsave(
   "output/plots/doy.png",
-  width = 3.5, height = 3.5, units = "in", dpi = 300)
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
 
 doy <-
   visits |> 
@@ -404,11 +422,7 @@ obs_covs <-
 #268 ptyrs
 #548 ptyrs
 
-# Import
-# NLCD
-# Lidar
-# Hydrology
-
+# Import site covariates
 site_covs <-
   bind_rows(
     mutate(points, year = 2021),
@@ -426,28 +440,165 @@ site_covs <-
       basal = mean(basal_area, na.rm = T), .by = point_id) |> 
     filter(!is.na(basal)),
   by = "point_id") |> 
-# Add provided covariates
-  
+# Add spatial covariates (lsm, area, stream, forest...)
+  left_join(
+    sf::st_drop_geometry(spat_covs),
+    by = "point_id") |> 
 # Factorize
   mutate(
+    point_id = factor(point_id),
     plot_type = factor(plot_type), 
+    plot_name = factor(plot_name),
     ownership = factor(ownership), 
-    year = factor(year)) |> 
+    year = factor(year),
+    d_stream = units::drop_units(d_stream),
+    ecozone = factor(ecozone)) |> 
 # Duplicate for site-year
 arrange(point_id, year) 
+
+# Plot site covariates
+
+# Plot type
+slice_head(site_covs, n = 1, by = point_id) |> 
+  ggplot() +
+  geom_bar(aes(x = plot_type)) +
+  labs(x = "Plot type", y = "Points") +
+  coord_cartesian(expand = T, clip = "off")
+
+ggsave(
+  "output/plots/plottype.png",
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
+
+# Ownership
+slice_head(site_covs, n = 1, by = point_id) |> 
+  ggplot() +
+  geom_bar(aes(x = ownership)) +
+  labs(x = "Ownership", y = "Points") +
+  coord_cartesian(expand = T, clip = "off")
+
+ggsave(
+  "output/plots/ownership.png",
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
+
+# Basal area
+slice_head(site_covs, n = 1, by = point_id) |> 
+  ggplot() +
+  geom_histogram(aes(x = basal), binwidth = 10) +
+  labs(x = "Basal area", y = "Points") +
+  coord_cartesian(expand = T, clip = "off")
+
+ggsave(
+  "output/plots/basal.png",
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
+
+# Ecozone
+slice_head(site_covs, n = 1, by = point_id) |> 
+  ggplot() +
+  geom_bar(aes(x = forcats::fct_infreq(ecozone))) +
+  labs(x = "Ecozone", y = "Points") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  coord_flip(clip = "off")
+
+ggsave(
+  "output/plots/ecozone.png",
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
+
+# Forest buffers
+slice_head(site_covs, n = 1, by = point_id) |> 
+  select(point_id, for_1500, for_5000) |> 
+  pivot_longer(cols = c(for_1500, for_5000)) |> 
+  mutate(
+    name = if_else(name == "for_1500", "1.5 km", "5 km")) |> 
+  ggplot() +
+  geom_histogram(aes(x = value), binwidth = .01) +
+  facet_wrap(~name, nrow = 2) +
+  labs(x = "Prop. forest within buffer", y = "Points") +
+  coord_cartesian(expand = T, clip = "off")
+
+ggsave(
+  "output/plots/forest.png",
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
+
+# Core patch area
+slice_head(site_covs, n = 1, by = point_id) |> 
+  ggplot() +
+  geom_histogram(aes(x = core), bins = 10) +
+  labs(x = "Core patch area (ha)", y = "Points") +
+  coord_cartesian(expand = T, clip = "off")
+
+ggsave(
+  "output/plots/core.png",
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
+
+# Patch perim-area ratio
+slice_head(site_covs, n = 1, by = point_id) |> 
+  ggplot() +
+  geom_histogram(aes(x = para), bins = 20) +
+  labs(x = "Patch perimeter:area ratio", y = "Points") +
+  coord_cartesian(expand = T, clip = "off")
+
+ggsave(
+  "output/plots/para.png",
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
+
+# Distance to stream
+slice_head(site_covs, n = 1, by = point_id) |> 
+  ggplot() +
+  geom_histogram(aes(x = d_stream), binwidth = 10) +
+  labs(x = "Distance to stream (m)", y = "Points") +
+  coord_cartesian(expand = T, clip = "off")
+
+ggsave(
+  "output/plots/dstream.png",
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
+
+# Edge density 1 mile
+slice_head(site_covs, n = 1, by = point_id) |> 
+  ggplot() +
+  geom_histogram(aes(x = ed_buff), binwidth = 2) +
+  labs(x = "Forest edge density (m/ha)", y = "Points") +
+  coord_cartesian(expand = T, clip = "off")
+
+ggsave(
+  "output/plots/ed.png",
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
+
+# Mean canopy height within 50m
+slice_head(site_covs, n = 1, by = point_id) |> 
+  ggplot() +
+  geom_histogram(aes(x = canopy_h), binwidth = 1) +
+  labs(x = "Mean canopy height (m) within 50 m", y = "Points") +
+  coord_cartesian(expand = T, clip = "off")
+
+ggsave(
+  "output/plots/canopy.png",
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
+
+# Heterogeneity (CV of canopy height within 100m)
+slice_head(site_covs, n = 1, by = point_id) |> 
+  ggplot() +
+  geom_histogram(aes(x = canopy_cv), binwidth = 0.05) +
+  labs(x = "CV of canopy height (m) within 100 m", y = "Points") +
+  coord_cartesian(expand = T, clip = "off")
+
+ggsave(
+  "output/plots/canopycv.png",
+  width = 3.5, height = 3.5, units = "in", dpi = "retina")
+
+# Make UMFs ---------------------------------------------------------------
 
 umfs <- list()
 
 for(i in 1:length(focal_spp)) {
-  umfs[i] <-
+  umfs[[i]] <-
     unmarkedFramePCount(
     y = 
       abundance |> 
       filter(species == focal_spp[i]) |> 
       select(-species) |> 
       select(-point_year),
-    siteCovs = site_covs,
-    obsCovs = obs_covs)
+    siteCovs = site_covs |> sf::st_drop_geometry(),
+    obsCovs = obs_covs |> sf::st_drop_geometry())
 }
 
 names(umfs) <- focal_spp
